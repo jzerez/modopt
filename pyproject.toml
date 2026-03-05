@@ -1,5 +1,11 @@
 [build-system]
-requires = ['setuptools']
+# setuptools>=61 implements PEP 660's build_editable hook, allowing
+# `pip install -e` to work.  wheel is recommended as well for building
+# sdist/wheel outputs.
+requires = [
+    'setuptools>=61',
+    'wheel',
+]
 build-backend = 'setuptools.build_meta'
 
 [project]
