@@ -478,7 +478,19 @@ class HVPUC(Optimizer):
             
             # HVP-related update for the BFGS Hessian approximation
             #######################################################
-            if itr <= 10:
+
+            """
+            JZ's interpretation:
+            check to see if we've progressed soem minimum number of iterations 
+
+            Then, rather than applying B_k s_k = y_k
+            (where B is the hessian approx, s is the step, and y_k is the change of gradient)
+
+            We say that B_k s_k = H_k s_k 
+
+            NB: why is (g_k - g_old) different than (H_k s_k)?
+            """
+            if itr <= 20:
                 w_k = g_k - g_old
             else:
                 hvp_new = self.hvp(x_k, d_k_temp[:nx])
@@ -498,12 +510,14 @@ class HVPUC(Optimizer):
 
             QN_d_k = d_k[:nx]
 
+            # JZ: Periodically reset/refresh Hessian Approx
             if itr%100 == 0:
                 QN = self.QN = BFGSScipy(nx=nx,
                                          exception_strategy='damp_update',
                                          min_curvature=0.2,
                                          init_scale='auto')
-                
+            
+            # JZ: QN is the approx hessian
             QN.update(QN_d_k, w_k)
 
             # HVP-related update for the BFGS Hessian approximation
