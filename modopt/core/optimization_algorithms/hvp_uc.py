@@ -4,10 +4,11 @@ import warnings
 
 from modopt import Optimizer
 from modopt.line_search_algorithms import Minpack2LS
-# from modopt.merit_functions import AugmentedLagrangian
 from modopt.core.merit_functions.uc_merit_function import UCMerit
 from modopt.approximate_hessians import BFGSScipy
 from modopt import CSDLAlphaProblem
+
+from update_B import AdaptiveMultiSecant3
 
 
 class HVPUC(Optimizer):
@@ -23,6 +24,8 @@ class HVPUC(Optimizer):
         If ``True``, record all outputs from the optimization.
         This needs to be enabled for hot-starting the same problem later,
         if the optimization is interrupted.
+    out_dir : str, optional
+        The directory to store all the output files generated from the optimization.
     hot_start_from : str, optional
         The record file from which to hot-start the optimization.
     hot_start_atol : float, default=0.
@@ -138,9 +141,10 @@ class HVPUC(Optimizer):
                               alpha_tol=self.options['ls_alpha_tol'],
                               )
 
+        self.AMS3 = AdaptiveMultiSecant3()
+
     def l1_penalty_line_search(self, x_k, x_qp, p_k, f_k, g_k):
         nx   = self.nx
-
         new_f_evals = 0
         converged = False
         # Penalty merit function value at alpha = alpha
@@ -238,15 +242,6 @@ class HVPUC(Optimizer):
         nx = self.nx
 
         x0 = self.problem.x0
-
-        # JZ: Array to store previous 10 design points 
-        n_prev = 10
-        # Previous 10 design points
-        prev_xs = np.zeros((n_prev, nx))
-        # Previoous 10 HVPs
-        prev_ys = np.zeros((n_prev, nx))
-
-
         maxiter = self.options['maxiter']
         # qp_maxiter = self.options['qp_maxiter']
 
@@ -315,6 +310,30 @@ class HVPUC(Optimizer):
                             step=0.,
                             low_curvature=0)
 
+        B_k = np.eye(nx)
+
+        # ### Getting first Hessian and convexifying it
+        # ################################################
+        B_k = self.problem._compute_objective_hessian(x_k)
+
+        def convexify(A, min_eig=1e-6, strategy='clip'):
+            # eigen decomposition (for symmetric matrices)
+            eigvals, eigvecs = np.linalg.eigh(A)
+
+            # clip/flip eigenvalues
+            if strategy == 'clip':
+                new_eigvals = np.clip(eigvals, min_eig, None)
+            elif strategy == 'flip':
+                new_eigvals = np.clip(np.abs(eigvals), min_eig, None)
+
+            # reconstruct matrix
+            A_new = eigvecs @ np.diag(new_eigvals) @ eigvecs.T
+
+            return A_new
+
+        B_k = convexify(B_k, min_eig=1e-8, strategy='flip')
+        # ################################################
+
         while itr < maxiter:
             itr_start = time.time()
             itr += 1
@@ -324,15 +343,10 @@ class HVPUC(Optimizer):
 
             # Compute the search direction toward the next iterate
 
-            # Solve a strictly convex quadratic program
-            # Minimize     1/2 x^T G x - a^T x
-            # Subject to   C.T x >= b
-
-            # def solve_qp(double[:, :] G, double[:] a, double[:, :] C=None, double[:] b=None, int meq=0, factorized=False):
-            # First meq constraints are treated as equality constraints
-
             try:
-                x_qp, f_qp, xu_qp, iter_qp, lag_qp, iact_qp = solve_qp(QN.B_k, -g_k)
+                x_qp, f_qp, xu_qp, iter_qp, lag_qp, iact_qp = solve_qp(B_k, -g_k)
+                # x_qp, f_qp, xu_qp, iter_qp, lag_qp, iact_qp = solve_qp(QN.B_k, -g_k)
+                # x_qp = np.linalg.solve(QN.B_k, -g_k)
                 p_k[:] = x_qp
 
             except Exception as e:
@@ -341,33 +355,27 @@ class HVPUC(Optimizer):
 
                 if "matrix G is not positive definite" in str(e):
                     print('Matrix G is not positive definite. Resetting Hessian.')
-                    # Reset Hessian
-                    wTw = np.dot(w_k, w_k)
-                    wTd = np.dot(w_k, d_k[:nx])
-
-                    init_scale = wTw / (wTd+1e-16) if wTd > 0 else 1.
+                    init_scale = 1.
                     self.QN = QN = BFGSScipy(nx=nx,
                                             exception_strategy='damp_update',
                                             init_scale=init_scale)
-                                            # init_scale=np.linalg.norm(np.diag(QN.B_k)))
-                    
-                    continue # Skip the rest of the iteration and solve QP with new reset Hessian
 
-            # Clip the step length such that the design variables remain within bounds
-            p_k[:nx] = np.clip(p_k, self.problem.x_lower - x_k, self.problem.x_upper - x_k)
+                    B_k = np.eye(nx)
+                    
+                    continue
 
             print('Major iteration:', itr)
             print("=====================================")
 
-            dir_deriv_al_0 = np.dot(g_k, p_k)
+            dir_deriv_0 = np.dot(g_k, p_k)
 
             # Compute the step length along the search direction via a line search
             p_k_temp = p_k * 1.
             x_k_temp = x_k * 1.
 
-            if dir_deriv_al_0 > -2.22e-16 or np.linalg.norm(p_k) <= 2.22e-16:
+            if dir_deriv_0 > -2.22e-16 or np.linalg.norm(p_k) <= 2.22e-16:
                 alpha = 1.0
-                mf_new, mfg_new, mf_slope_new, new_f_evals, new_g_evals, converged = f_k, g_k, dir_deriv_al_0, 1, 1, True
+                mf_new, mfg_new, mf_slope_new, new_f_evals, new_g_evals, converged = f_k, g_k, dir_deriv_0, 1, 1, True
 
             else:
                 alpha, mf_new, mfg_new, mf_slope_new, new_f_evals, new_g_evals, converged = LSS.search(
@@ -479,6 +487,7 @@ class HVPUC(Optimizer):
             # hvp_old = self.hvp(x_k, d_k_temp[:nx])
             # ngev += 1
             x_k += d_k_temp
+            f_old = f_k * 1.
             g_old = g_k * 1.
 
             self.MF.update_functions_in_cache(['f', 'g'], x_k)
@@ -488,89 +497,30 @@ class HVPUC(Optimizer):
             # HVP-related update for the BFGS Hessian approximation
             #######################################################
 
-            """
-            JZ's interpretation:
-            check to see if we've progressed soem minimum number of iterations 
+            # Adaptive Multi-Secant V3
+            #######################################################
 
-            Then, rather than applying B_k s_k = y_k
-            (where B is the hessian approx, s is the step, and y_k is the change of gradient)
+            m = 3 if itr > 1 else min(nx-1, 10)
+            S = np.ones((nx, m))
+            S[:, 0] = d_k[:nx]
 
-            We say that B_k s_k = H_k s_k 
-
-            NB: why is (g_k - g_old) different than (H_k s_k)?
-            """
-            min_itr = 10
-            if itr < min_itr:
-                w_k = g_k - g_old
-            else:
-                hvp_new = self.hvp(x_k, d_k_temp[:nx])
+            Y = np.ones(S.shape)
+            for i in range(S.shape[1]):
+                Y[:, i] = self.hvp(x_k, S[:, i]) # Hessian-vector product with the ith column of S (the step taken)
                 ngev += 1
-                w_k = hvp_new
+                if i+1 < S.shape[1]:
+                    S[:, i+1] = Y[:, i]
 
-                if np.isnan(w_k).any() or np.isinf(w_k).any():
-                    print('Hessian-vector product contains NaN or Inf. Setting w_k = g_k - g_old.')
-                    w_k = g_k - g_old
-
-            #######################################################
-
-
-
-
-            # JZ: Sequential distance weighted HVP updates
-            ##############################################
-            # if itr <= 10:
-            #     w_k = g_k - g_old
-            # else:
-            #     """
-            #     MS BFGS:
-            #     B_t+1 = Bt + Yt(Yt.T St)^-1 Yt.T - Bt St (St.T Bt St)^-1 St.T Bt
-
-            #     In generic form:
-            #     B_t+1 = Bt + 
-            #     """
-            #     pass
-            ##############################################
-
-            wTw = np.dot(w_k, w_k)
-            wTd = np.dot(w_k, d_k[:nx])
-            dBd = np.dot(d_k[:nx], QN.B_k @ d_k[:nx])
-            low_curvature = 1 if (wTd > 0.2*dBd) else 0
-            
-            # JZ: Step-direction for the hessian update
-            QN_d_k = d_k[:nx]
-
-            # JZ: Periodically reset/refresh Hessian Approx
-            if itr%100 == 0:
-                QN = self.QN = BFGSScipy(nx=nx,
-                                         exception_strategy='damp_update',
-                                         min_curvature=0.2,
-                                         init_scale='auto')
-            
-            # JZ: QN is the approx hessian
-            QN.update(QN_d_k, w_k)
-
-            # HVP-related update for the BFGS Hessian approximation
-            # JZ: According to Anugrah, this will never actually trigger
-            #######################################################
-
-            v1 = QN_d_k
-            if itr > min_itr:
-                pred_curvature = v1.T @ QN.B_k @ v1
-                actual_curvature = v1.T @ hvp_new
-                rel_err = np.abs(pred_curvature - actual_curvature) / (np.abs(pred_curvature) + eps)
-                print(f'Iteration {itr}: Relative error between predicted and actual curvature: {rel_err:.2e}')
-                if rel_err > 0.5:
-                    print(f'Iteration {itr}: High relative error in curvature approximation. Updating Hessian.')
-                    v2 = hvp_new
-                    hvp_new2 = self.hvp(x_k, v2)
-                    ngev += 1
-                    QN.update(v2, hvp_new2)
+            if itr <= 3:
+                B_k, _success = self.AMS3.update_B(B_k, S, Y, x_k, r=m)
+            else:
+                QN.update(S[:, 0], Y[:, 0])
+                B_k = QN.B_k * 1.0
 
             #######################################################
 
-
-            # # <<<<<<<<<<<<<<<<<<<
-            # # ALGORITHM ENDS HERE
+            # <<<<<<<<<<<<<<<<<<<
+            # ALGORITHM ENDS HERE
 
             opt_satisfied, opt = self.opt_check(g_k)
             tol_satisfied = opt_satisfied
@@ -586,7 +536,8 @@ class HVPUC(Optimizer):
                 ngev=ngev,
                 step=alpha,
                 # step=0.5**ls_count,
-                low_curvature=low_curvature,)
+                low_curvature=1.,)
+                # low_curvature=low_curvature,)
             if tol_satisfied:
                 print('Convergence achieved!')
                 break
