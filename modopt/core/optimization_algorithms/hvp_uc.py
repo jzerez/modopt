@@ -238,6 +238,15 @@ class HVPUC(Optimizer):
         nx = self.nx
 
         x0 = self.problem.x0
+
+        # JZ: Array to store previous 10 design points 
+        n_prev = 10
+        # Previous 10 design points
+        prev_xs = np.zeros((n_prev, nx))
+        # Previoous 10 HVPs
+        prev_ys = np.zeros((n_prev, nx))
+
+
         maxiter = self.options['maxiter']
         # qp_maxiter = self.options['qp_maxiter']
 
@@ -490,7 +499,8 @@ class HVPUC(Optimizer):
 
             NB: why is (g_k - g_old) different than (H_k s_k)?
             """
-            if itr <= 20:
+            min_itr = 10
+            if itr < min_itr:
                 w_k = g_k - g_old
             else:
                 hvp_new = self.hvp(x_k, d_k_temp[:nx])
@@ -503,11 +513,30 @@ class HVPUC(Optimizer):
 
             #######################################################
 
+
+
+
+            # JZ: Sequential distance weighted HVP updates
+            ##############################################
+            # if itr <= 10:
+            #     w_k = g_k - g_old
+            # else:
+            #     """
+            #     MS BFGS:
+            #     B_t+1 = Bt + Yt(Yt.T St)^-1 Yt.T - Bt St (St.T Bt St)^-1 St.T Bt
+
+            #     In generic form:
+            #     B_t+1 = Bt + 
+            #     """
+            #     pass
+            ##############################################
+
             wTw = np.dot(w_k, w_k)
             wTd = np.dot(w_k, d_k[:nx])
             dBd = np.dot(d_k[:nx], QN.B_k @ d_k[:nx])
             low_curvature = 1 if (wTd > 0.2*dBd) else 0
-
+            
+            # JZ: Step-direction for the hessian update
             QN_d_k = d_k[:nx]
 
             # JZ: Periodically reset/refresh Hessian Approx
@@ -521,20 +550,21 @@ class HVPUC(Optimizer):
             QN.update(QN_d_k, w_k)
 
             # HVP-related update for the BFGS Hessian approximation
+            # JZ: According to Anugrah, this will never actually trigger
             #######################################################
 
-            # v1 = QN_d_k
-            # if itr > 10:
-            #     pred_curvature = v1.T @ QN.B_k @ v1
-            #     actual_curvature = v1.T @ hvp_new
-            #     rel_err = np.abs(pred_curvature - actual_curvature) / (np.abs(pred_curvature) + eps)
-            #     print(f'Iteration {itr}: Relative error between predicted and actual curvature: {rel_err:.2e}')
-            #     if rel_err > 0.5:
-            #         print(f'Iteration {itr}: High relative error in curvature approximation. Updating Hessian.')
-            #         v2 = hvp_new
-            #         hvp_new2 = self.hvp(x_k, v2)
-            #         ngev += 1
-            #         QN.update(v2, hvp_new2)
+            v1 = QN_d_k
+            if itr > min_itr:
+                pred_curvature = v1.T @ QN.B_k @ v1
+                actual_curvature = v1.T @ hvp_new
+                rel_err = np.abs(pred_curvature - actual_curvature) / (np.abs(pred_curvature) + eps)
+                print(f'Iteration {itr}: Relative error between predicted and actual curvature: {rel_err:.2e}')
+                if rel_err > 0.5:
+                    print(f'Iteration {itr}: High relative error in curvature approximation. Updating Hessian.')
+                    v2 = hvp_new
+                    hvp_new2 = self.hvp(x_k, v2)
+                    ngev += 1
+                    QN.update(v2, hvp_new2)
 
             #######################################################
 
