@@ -5,7 +5,19 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 
+"""
+Different Strategies for updating the hessian approximation using HVP information.
+"""
+
+
+# This Method is equivalent to Direction 3 from 2-19 meeting notes
 class AdaptiveMultiSecant1():
+
+    # Here, we're framing the update as an optimization problem
+    # Want to find matrices U and V with the "least-square magnitude"
+    # That satisfy:
+    #   Our secant conditions
+    #   a positive definite hessian update 
     def __init__(self):
         jax_obj = lambda U, V: jnp.linalg.norm(U @ U.T - V @ V.T, ord='fro')
         _obj = jax.jit(jax_obj)
@@ -14,12 +26,14 @@ class AdaptiveMultiSecant1():
         _grad = jax.jit(jax.grad(jax_obj, argnums=[0,1]))
         self._grad  = lambda U, V: np.concatenate([dF.ravel() for dF in _grad(U, V)])
         
+        # Multi-secant condition
         def jax_con1(U, V, B, S, Y):
             B_new = B + U @ U.T - V @ V.T
             return jnp.ravel(B_new @ S - Y)
         _con1 = jax.jit(jax_con1)
         self._con1  = lambda U, V, B, S, Y: np.array(_con1(U, V, B, S, Y))
 
+        # Forcing positive-definiteness (but in a weird way)? 
         def jax_con2(U, V, B):
             B_new = B + U @ U.T - V @ V.T
             w = jnp.real(jnp.linalg.eigvals(B_new))
@@ -43,12 +57,17 @@ class AdaptiveMultiSecant1():
         nx = B.shape[0]
         x0 = np.ones(((r1+r2)*nx,))
 
+        # Unpack the design vector (x0) into U components and V components.
+        # U is comprised of r1 vectors of length nx
+        # V is comprised of r2 vectors of length nx
+
         obj  = lambda x: self._obj(x[:r1*nx].reshape(nx, r1), 
                                    x[r1*nx:].reshape(nx, r2))
         grad = lambda x: self._grad(x[:r1*nx].reshape(nx, r1), 
                                     x[r1*nx:].reshape(nx, r2))
 
         constraints = [
+            # Enforce secant condition
             {'type': 'eq',
             'fun': lambda x: self._con1(x[:r1*nx].reshape(nx, r1), 
                                         x[r1*nx:].reshape(nx, r2), 
@@ -56,6 +75,8 @@ class AdaptiveMultiSecant1():
             'jac': lambda x: self._jac1(x[:r1*nx].reshape(nx, r1), 
                                         x[r1*nx:].reshape(nx, r2), 
                                         B, S, Y)},
+            
+            # Enforce positive definiteness
             {'type': 'ineq',
             'fun': lambda x: self._con2(x[:r1*nx].reshape(nx, r1), 
                                         x[r1*nx:].reshape(nx, r2), 
@@ -92,8 +113,15 @@ class AdaptiveMultiSecant1():
 
         return B_new, results['success']
 
+# This method is mostly equivalent to Direction 4 in the 2-19 Notes
+# Not sure about the initialization of B: 0.5*(1e-6 * np.eye(nx)) + 0.5*B
 class AdaptiveMultiSecant2():
     def __init__(self):
+        # Here, we're framing the update as an optimization problem
+        # Want to find matrix U with the "least-square magnitude"
+        # That satisfy:
+        #   Our secant conditions
+        #   a positive definite hessian update 
         jax_obj = lambda U: jnp.linalg.norm(U @ U.T, ord='fro')
         _obj = jax.jit(jax_obj)
         self._obj  = lambda U: np.float64(_obj(U))
@@ -117,8 +145,11 @@ class AdaptiveMultiSecant2():
         nx = S.shape[0]
         x0 = np.ones((r*nx,))
 
+        # Initialize B as some scaled identity matrix (for positive definitness), 
+        # plus scaled-down version of the current hessian approx
         B = 0.5*(1e-6 * np.eye(nx)) + 0.5*B
 
+        # Unpack values of U from x0
         obj  = lambda x: self._obj(x.reshape(nx, r))
         grad = lambda x: self._grad(x.reshape(nx, r))
 
@@ -154,10 +185,11 @@ class AdaptiveMultiSecant2():
 
         return B_new, results['success']
 
+# Equivalent to direction 2 on 03-04 Notes 
 class AdaptiveMultiSecant3():
     def __init__(self):
         self.save_last = 3
-        self.p     = 1.0 # 1.0 or 2.0
+        self.p     = 1.0 # 1.0 or 2.0. Param for computing distance weighting
         self.gamma = 1e-2
         self.all_X = None
         self.all_S = None
@@ -179,13 +211,20 @@ class AdaptiveMultiSecant3():
         self._grad  = lambda U, B, S_all, Y_all, beta, weights: np.asarray(_grad(U, B, S_all, Y_all, beta, weights)[0].ravel())
 
     def update_B(self, B, S, Y, x_k, r=1):
+        # NOTE: should we handle r and m separately? Right now we treat them as equal. 
+        # What is optimal relationship between the two? 
+        # r_k+1 >= m_k+1 (Rank of update needs to at least be equal to number of HVPs)
+        # r_k+1 < sum_i m_i (Rank of update needs to be less than the total number of HVPs. Why?)
         if self.all_S is None:
             self.all_S = S * 1.0
             self.all_Y = Y * 1.0
             self.all_X = x_k.reshape(-1,1) * 1.
             self.weights = np.ones((r,), dtype=np.float64)
         else:
+            # This is requried for when the number of previous steps is less than self.save_last
             save_last = min(np.int32(self.all_S.shape[1]/r), self.save_last)
+
+            # Store history for S, Y, and X
             self.all_S = np.hstack((S, self.all_S[:,:save_last*r]))
             self.all_Y = np.hstack((Y, self.all_Y[:,:save_last*r]))
             self.all_X = np.hstack((x_k.reshape(-1,1), self.all_X[:,:save_last]))
@@ -195,9 +234,17 @@ class AdaptiveMultiSecant3():
             self.weights = np.repeat(1.0 / (1.0 + distance**self.p), r)
             # self.weights = np.repeat(1.0 / np.exp(distance*self.p), r)
 
+        # Problem with the weights. "save last" is ambiguous. It should refer to the number of 
+        # previous HVPs. But this breaks down when the number of HVPs is not consistent between steps. 
+        # We will run into problems when nx > 6. The first step will use at least 6 HVPs, rather than 3. 
         self.weights = self.gamma + (1-self.gamma) * self.weights
+
+        # Beta is how much we care about the norm of UU^T. 
+        # Here we are saying that the update for B should be dominated by
+        # satisfying a weighted sum of past secant conditions.
         beta = np.min(self.weights) * 1e-1
 
+        # Turn off weights and beta. Equal weighting for each. 
         self.weights[:] = 1.0
         beta = 1.0
 

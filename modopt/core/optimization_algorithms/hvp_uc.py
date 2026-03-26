@@ -8,7 +8,7 @@ from modopt.core.merit_functions.uc_merit_function import UCMerit
 from modopt.approximate_hessians import BFGSScipy
 from modopt import CSDLAlphaProblem
 
-from update_B import AdaptiveMultiSecant3
+from modopt.core.optimization_algorithms.update_B import AdaptiveMultiSecant3
 
 
 class HVPUC(Optimizer):
@@ -500,11 +500,20 @@ class HVPUC(Optimizer):
             # Adaptive Multi-Secant V3
             #######################################################
 
+            # m is the number of HVPs.must be <= r
+            # normally use 3 HVPs per step. Incorporate more HVPs at first step
+            # NOTE: may be worth tuning 
             m = 3 if itr > 1 else min(nx-1, 10)
+
+            # Set of HVP directions (inputs)
             S = np.ones((nx, m))
+            # First HVP direction is the step direction
             S[:, 0] = d_k[:nx]
 
+            # Set of HVPs (outputs)
             Y = np.ones(S.shape)
+            
+            # Krylov sub-space HVPs. the ith HVP is along the direction of the (i-1)th HVP
             for i in range(S.shape[1]):
                 Y[:, i] = self.hvp(x_k, S[:, i]) # Hessian-vector product with the ith column of S (the step taken)
                 ngev += 1
@@ -513,6 +522,7 @@ class HVPUC(Optimizer):
 
             if itr <= 3:
                 B_k, _success = self.AMS3.update_B(B_k, S, Y, x_k, r=m)
+                print(f'Doing AMS3 update for iter {itr}. Success = {_success}')
             else:
                 QN.update(S[:, 0], Y[:, 0])
                 B_k = QN.B_k * 1.0
