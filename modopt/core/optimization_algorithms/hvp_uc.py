@@ -7,6 +7,7 @@ from modopt.line_search_algorithms import Minpack2LS
 from modopt.core.merit_functions.uc_merit_function import UCMerit
 from modopt.approximate_hessians import BFGSScipy
 from modopt import CSDLAlphaProblem
+from modopt.utils.general_utils import is_positive_definite
 
 from modopt.core.optimization_algorithms.update_B import AdaptiveMultiSecant3
 
@@ -238,6 +239,14 @@ class HVPUC(Optimizer):
         except ImportError:
             raise ImportError("HiGHS cannot be imported for the QP solver.  Install it with 'pip install highspy'.")
 
+        # Histogram for Bk's 
+        # success
+        # success, non PD
+        # fail
+        bk_hist = dict()
+        qn_bk_norms = []
+        ams_bk_norms = []
+
         # Assign shorter names to variables and methods
         nx = self.nx
 
@@ -364,7 +373,7 @@ class HVPUC(Optimizer):
                     
                     continue
 
-            print('Major iteration:', itr)
+            print('\nMajor iteration:', itr)
             print("=====================================")
 
             dir_deriv_0 = np.dot(g_k, p_k)
@@ -502,8 +511,9 @@ class HVPUC(Optimizer):
 
             # m is the number of HVPs.must be <= r
             # normally use 3 HVPs per step. Incorporate more HVPs at first step
-            # NOTE: may be worth tuning 
-            m = 3 if itr > 1 else min(nx-1, 10)
+            # NOTE: The next area of investigation. How to pick the number of HVPs and the rank of the update 
+
+            m = min(nx-1, 5)
 
             # Set of HVP directions (inputs)
             S = np.ones((nx, m))
@@ -514,18 +524,30 @@ class HVPUC(Optimizer):
             Y = np.ones(S.shape)
             
             # Krylov sub-space HVPs. the ith HVP is along the direction of the (i-1)th HVP
-            for i in range(S.shape[1]):
+            for i in range(m):
                 Y[:, i] = self.hvp(x_k, S[:, i]) # Hessian-vector product with the ith column of S (the step taken)
                 ngev += 1
-                if i+1 < S.shape[1]:
+                if i+1 < m:
                     S[:, i+1] = Y[:, i]
 
-            if itr <= 3:
-                B_k, _success = self.AMS3.update_B(B_k, S, Y, x_k, r=m)
-                print(f'Doing AMS3 update for iter {itr}. Success = {_success}')
-            else:
-                QN.update(S[:, 0], Y[:, 0])
+
+            B_k, _success = self.AMS3.update_B(B_k, S, Y, x_k, r=m)
+            QN.update(S[:, 0], Y[:, 0])
+            ams_bk_norms.append(np.linalg.norm(B_k))
+            qn_bk_norms.append(np.linalg.norm(QN.B_k))
+
+            if not _success:
+                print('AMS not successful. Falling back on Quasi-Newton')
+        
                 B_k = QN.B_k * 1.0
+                bk_hist['fail'] = bk_hist.get('fail', 0) + 1
+            elif not is_positive_definite(B_k):
+                print('AMS Returns non PD B_k. Falling back on Quasi-Newton')
+                B_k = QN.B_k * 1.0
+                bk_hist['non-PD'] = bk_hist.get('non-PD', 0) + 1
+            else:
+                bk_hist['success'] = bk_hist.get('success', 0) + 1
+
 
             #######################################################
 
@@ -562,10 +584,15 @@ class HVPUC(Optimizer):
             'ngev': ngev,
             'niter': itr,
             'time': self.total_time,
-            'success': tol_satisfied
+            'success': tol_satisfied,
+            'bk hist': bk_hist,
+            'ams_bk_norms': ams_bk_norms,
+            'qn_bk_norms': qn_bk_norms,
         }
 
         # Run post-processing for the Optimizer() base class
         self.run_post_processing()
-
+        print('\n=================')
+        print(bk_hist)
+        print('=================')
         return self.results
