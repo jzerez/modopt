@@ -89,7 +89,6 @@ class HVPUC(Optimizer):
             self.obj = lambda x: self.problem._compute_objective(x, check_failure=True)
             self.grad = lambda x: self.problem._compute_objective_gradient(x, check_failure=True)
         ##################################################################
-
         self.options.declare('maxiter', default=1000, types=int)
         self.options.declare('opt_tol', default=1e-7, types=float)
         self.options.declare('readable_outputs', types=list, default=[])
@@ -244,8 +243,13 @@ class HVPUC(Optimizer):
         # success, non PD
         # fail
         bk_hist = dict()
-        qn_bk_norms = []
-        ams_bk_norms = []
+        ams_hess = []
+        qn_hess = []
+        true_hess = []
+        bk_obj = []
+        Us = []
+        ams_success = []
+
 
         # Assign shorter names to variables and methods
         nx = self.nx
@@ -513,7 +517,7 @@ class HVPUC(Optimizer):
             # normally use 3 HVPs per step. Incorporate more HVPs at first step
             # NOTE: The next area of investigation. How to pick the number of HVPs and the rank of the update 
 
-            m = min(nx-1, 5)
+            m = 1
 
             # Set of HVP directions (inputs)
             S = np.ones((nx, m))
@@ -531,10 +535,22 @@ class HVPUC(Optimizer):
                     S[:, i+1] = Y[:, i]
 
 
-            B_k, _success = self.AMS3.update_B(B_k, S, Y, x_k, r=m)
+            B_k, results, U = self.AMS3.update_B(B_k, S, Y, x_k, r=m)
+            _success = results['success']
+            Us.append(U)
+
             QN.update(S[:, 0], Y[:, 0])
-            ams_bk_norms.append(np.linalg.norm(B_k))
-            qn_bk_norms.append(np.linalg.norm(QN.B_k))
+            ams_hess.append(B_k)
+            qn_hess.append(QN.B_k)
+
+            hvp_base = np.eye(nx)
+            hess = np.zeros_like(hvp_base)
+            for i in range(nx):
+                hess[:, i] = self.hvp(x_k, hvp_base[:, i])
+
+            true_hess.append(hess)
+            bk_obj.append(results['fun'])
+            ams_success.append(_success)
 
             if not _success:
                 print('AMS not successful. Falling back on Quasi-Newton')
@@ -586,8 +602,12 @@ class HVPUC(Optimizer):
             'time': self.total_time,
             'success': tol_satisfied,
             'bk hist': bk_hist,
-            'ams_bk_norms': ams_bk_norms,
-            'qn_bk_norms': qn_bk_norms,
+            'ams_hess': ams_hess,
+            'qn_hess': qn_hess,
+            'true_hess': true_hess,
+            'bk_obj': bk_obj,
+            'U': Us,
+            'ams_success': ams_success,
         }
 
         # Run post-processing for the Optimizer() base class

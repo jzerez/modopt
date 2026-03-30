@@ -188,7 +188,7 @@ class AdaptiveMultiSecant2():
 # Equivalent to direction 2 on 03-04 Notes 
 class AdaptiveMultiSecant3():
     def __init__(self):
-        self.save_last = 3
+        self.save_last = 5
         self.p     = 1.0 # 1.0 or 2.0. Param for computing distance weighting
         self.gamma = 1e-2   # Fudge factor for tuning weights. Close to 1 means distance doesn't impact weighting. Close to zero means that normal weighting applies. This term ensures a minimum influence from far away points. 
         self.all_X = None
@@ -198,16 +198,20 @@ class AdaptiveMultiSecant3():
         self.weights = None
         self.prev_U = None
         self.prev_B = None
+        self.n_itr = 0
+        self.x0 = None
 
         # NOTE: Need to add something here to prevent/catch overflow values of U. 
         def jax_obj(U, B, S_all, Y_all, beta, weights):
             # find lowest magnitude of U. 
-            pow = jnp.min(jnp.abs(U))
+            # pow = jnp.min(jnp.abs(U))
+            pow = 1.0
             obj = jnp.linalg.norm(U/pow @ U.T/pow, ord='fro') * pow**2
             B_new = B + U @ U.T
             c_all = weights*(B_new @ S_all - Y_all)
 
             penalized_obj = beta * obj + jnp.sum(jnp.linalg.norm(c_all, axis=0))
+            # penalized_obj = beta * obj + jnp.linalg.norm(c_all, ord='fro')
             return penalized_obj
 
         _obj = jax.jit(jax_obj)
@@ -217,7 +221,8 @@ class AdaptiveMultiSecant3():
         self._grad  = lambda U, B, S_all, Y_all, beta, weights: np.asarray(_grad(U, B, S_all, Y_all, beta, weights)[0].ravel())
 
     def update_B(self, B, S, Y, x_k, r=1):
-        m = S.shape[1]
+        nx, m = S.shape
+        
 
         # NOTE: should we handle r and m separately? Right now we treat them as equal. 
         # What is optimal relationship between the two? 
@@ -227,25 +232,37 @@ class AdaptiveMultiSecant3():
             self.all_S = S * 1.0
             self.all_Y = Y * 1.0
             self.all_X = x_k.reshape(-1,1) * 1.
-            self.weights = np.ones((r,), dtype=np.float64)
+            self.x0 = x_k.reshape(-1,1) * 1.
+            self.weights = np.ones((m,), dtype=np.float64)
             self.all_m = np.array([m,])
+            r = 2
         else:
             # # This is requried for when the number of previous steps is less than self.save_last
             # save_last = min(np.int32(self.all_S.shape[1]/r), self.save_last)
-
             # Store history for S, Y, and X
             self.all_m = np.hstack((m, self.all_m[:self.save_last]))
             m_total = np.sum(self.all_m)
 
-            self.all_S = np.hstack((S, self.all_S))[:,:m_total]
-            self.all_Y = np.hstack((Y, self.all_Y))[:,:m_total]
-            self.all_X = np.hstack((x_k.reshape(-1,1), self.all_X[:,:self.save_last]))
+            self.all_S = np.hstack((S, self.all_S))
+            while self.all_S.shape[1] > m_total:
+                self.all_S = np.delete(self.all_S, -2, axis=1)
+                
+            self.all_Y = np.hstack((Y, self.all_Y))
+            while self.all_Y.shape[1] > m_total:
+                self.all_Y = np.delete(self.all_Y, -2, axis=1)
+            
+
+            self.all_X = np.hstack((x_k.reshape(-1,1), self.all_X))
+            while self.all_X.shape[1] > self.save_last + 1:
+                self.all_X = np.delete(self.all_X, -2, axis=1)
 
             dX = x_k.reshape(-1,1) - self.all_X
             distance = np.linalg.norm(dX, axis=0)
             self.weights = np.repeat(1.0 / (1.0 + distance**self.p), self.all_m)
+            r = max(min(m_total, nx), 2)
             # self.weights = np.repeat(1.0 / np.exp(distance*self.p), r)
-
+        if self.n_itr > 100:
+            print(self.weights)
         # Problem with the weights. "save last" is ambiguous. It should refer to the number of 
         # previous HVPs. But this breaks down when the number of HVPs is not consistent between steps. 
         # We will run into problems when nx > 6. The first step will use at least 6 HVPs, rather than 3. 
@@ -254,16 +271,15 @@ class AdaptiveMultiSecant3():
         # Beta is how much we care about the norm of UU^T. 
         # Here we are saying that the update for B should be dominated by
         # satisfying a weighted sum of past secant conditions.
-        beta = np.min(self.weights) * 10
-
-        nx = S.shape[0]
+        beta = np.min(self.weights) * 0.10
         
         # Seed optimizer with previous U matrix, if available. 
-        if self.prev_U is None:
-            x0 = np.ones((r*nx,))
-        else:
+        if not (self.prev_U is None) and (self.all_S.shape[1] > self.save_last):
             x0 = np.reshape(self.prev_U, (r*nx))
+        else:
+            x0 = np.ones((r*nx,))
 
+        # x0 = np.ones((r*nx,))
         B = 1e-6 * np.eye(nx)
 
         obj  = lambda x: self._obj(x.reshape(nx, r), B, self.all_S, self.all_Y, beta, self.weights)
@@ -284,23 +300,22 @@ class AdaptiveMultiSecant3():
             )
 
         U = np.reshape(results.x, (nx, r))
-
+        if np.all(np.isclose(U - U[:, 0].reshape(-1, 1), 0)):
+            print('U is rank 1!')
 
         if results['success']:
             
             B_new = B + U @ U.T
             try: 
                 _ = np.linalg.cholesky(B_new)
+                self.prev_U = U
+                self.prev_B = B_new
             except np.linalg.LinAlgError:
-                print('B_new is not Positive Definite!')
-                print(U)
-
-            self.prev_U = U
-            self.prev_B = B_new
+                print('B_new is not Positive Definite!')            
         else:
             B_new = B
             print(results['message'])
 
         print(f"Success of multi-secant update: {results['success']}")
-
-        return B_new, results['success']
+        self.n_itr += 1
+        return B_new, results, U
