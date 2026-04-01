@@ -346,7 +346,7 @@ class HVPUC(Optimizer):
 
         B_k = convexify(B_k, min_eig=1e-8, strategy='flip')
         # ################################################
-
+        all_Xs = np.array([])
         while itr < maxiter:
             itr_start = time.time()
             itr += 1
@@ -517,7 +517,7 @@ class HVPUC(Optimizer):
             # normally use 3 HVPs per step. Incorporate more HVPs at first step
             # NOTE: The next area of investigation. How to pick the number of HVPs and the rank of the update 
 
-            m = 1
+            m = 3
 
             # Set of HVP directions (inputs)
             S = np.ones((nx, m))
@@ -534,7 +534,7 @@ class HVPUC(Optimizer):
                 if i+1 < m:
                     S[:, i+1] = Y[:, i]
 
-
+            all_Xs = np.hstack((all_Xs, x_k.reshape(-1,1))) if all_Xs.size else x_k.reshape(-1,1)
             B_k, results, U = self.AMS3.update_B(B_k, S, Y, x_k, r=m)
             _success = results['success']
             Us.append(U)
@@ -615,4 +615,8 @@ class HVPUC(Optimizer):
         print('\n=================')
         print(bk_hist)
         print('=================')
+        xs = np.array(all_Xs)
+        dists = np.linalg.norm(xs[:, 0].reshape(-1, 1) - xs, axis=0)
+        print(xs.shape)
+        print(dists)
         return self.results

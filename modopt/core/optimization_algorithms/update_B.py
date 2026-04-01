@@ -188,7 +188,7 @@ class AdaptiveMultiSecant2():
 # Equivalent to direction 2 on 03-04 Notes 
 class AdaptiveMultiSecant3():
     def __init__(self):
-        self.save_last = 5
+        self.save_last = 25
         self.p     = 1.0 # 1.0 or 2.0. Param for computing distance weighting
         self.gamma = 1e-2   # Fudge factor for tuning weights. Close to 1 means distance doesn't impact weighting. Close to zero means that normal weighting applies. This term ensures a minimum influence from far away points. 
         self.all_X = None
@@ -235,7 +235,7 @@ class AdaptiveMultiSecant3():
             self.x0 = x_k.reshape(-1,1) * 1.
             self.weights = np.ones((m,), dtype=np.float64)
             self.all_m = np.array([m,])
-            r = 2
+            r = min(m, nx)
         else:
             # # This is requried for when the number of previous steps is less than self.save_last
             # save_last = min(np.int32(self.all_S.shape[1]/r), self.save_last)
@@ -244,24 +244,27 @@ class AdaptiveMultiSecant3():
             m_total = np.sum(self.all_m)
 
             self.all_S = np.hstack((S, self.all_S))
+
+            ri = -1
             while self.all_S.shape[1] > m_total:
-                self.all_S = np.delete(self.all_S, -2, axis=1)
+                self.all_S = np.delete(self.all_S, ri, axis=1)
                 
             self.all_Y = np.hstack((Y, self.all_Y))
             while self.all_Y.shape[1] > m_total:
-                self.all_Y = np.delete(self.all_Y, -2, axis=1)
+                self.all_Y = np.delete(self.all_Y, ri, axis=1)
             
 
             self.all_X = np.hstack((x_k.reshape(-1,1), self.all_X))
             while self.all_X.shape[1] > self.save_last + 1:
-                self.all_X = np.delete(self.all_X, -2, axis=1)
+                self.all_X = np.delete(self.all_X, ri, axis=1)
 
             dX = x_k.reshape(-1,1) - self.all_X
             distance = np.linalg.norm(dX, axis=0)
-            self.weights = np.repeat(1.0 / (1.0 + distance**self.p), self.all_m)
-            r = max(min(m_total, nx), 2)
+            self.weights = np.repeat(1.0 / (1.0 + distance**self.p) / np.exp(distance), self.all_m)
+            r = max(min(m_total, nx, 10), 2)
+            # r = 10
             # self.weights = np.repeat(1.0 / np.exp(distance*self.p), r)
-        if self.n_itr > 100:
+        if self.n_itr > self.save_last:
             print(self.weights)
         # Problem with the weights. "save last" is ambiguous. It should refer to the number of 
         # previous HVPs. But this breaks down when the number of HVPs is not consistent between steps. 
@@ -271,13 +274,14 @@ class AdaptiveMultiSecant3():
         # Beta is how much we care about the norm of UU^T. 
         # Here we are saying that the update for B should be dominated by
         # satisfying a weighted sum of past secant conditions.
-        beta = np.min(self.weights) * 0.10
+        beta = np.min(self.weights) * 0.1
         
         # Seed optimizer with previous U matrix, if available. 
-        if not (self.prev_U is None) and (self.all_S.shape[1] > self.save_last):
-            x0 = np.reshape(self.prev_U, (r*nx))
-        else:
-            x0 = np.ones((r*nx,))
+        x0 = np.ones((r*nx,))
+
+        if not (self.prev_U is None):
+            nu = self.prev_U.shape[1]
+            x0[:nu*nx] = np.reshape(self.prev_U, (nu*nx))
 
         # x0 = np.ones((r*nx,))
         B = 1e-6 * np.eye(nx)
