@@ -100,6 +100,7 @@ class HVPUC(Optimizer):
         self.options.declare('ls_eta_a', default=1e-4, types=float)
         self.options.declare('ls_eta_w', default=0.95, types=float)
         self.options.declare('ls_alpha_tol', default=1e-14, types=float)
+        self.options.declare('m', default=1, types=int)
 
         self.available_outputs = {
             'major': int,
@@ -124,6 +125,10 @@ class HVPUC(Optimizer):
         self.successive_undefined_iterations = 0
         
         self.QN = BFGSScipy(nx=nx,
+                            exception_strategy='damp_update',
+                            init_scale=1.0)
+        
+        self.QN_HVP = BFGSScipy(nx=nx,
                             exception_strategy='damp_update',
                             init_scale=1.0)
             
@@ -250,7 +255,6 @@ class HVPUC(Optimizer):
         Us = []
         ams_success = []
 
-
         # Assign shorter names to variables and methods
         nx = self.nx
 
@@ -261,6 +265,7 @@ class HVPUC(Optimizer):
         LSS = self.LSS
         QN = self.QN
         MF = self.MF
+        QN_HVP = self.QN_HVP
 
         eps = 2.22e-16
 
@@ -327,24 +332,24 @@ class HVPUC(Optimizer):
 
         # ### Getting first Hessian and convexifying it
         # ################################################
-        B_k = self.problem._compute_objective_hessian(x_k)
+        # B_k = self.problem._compute_objective_hessian(x_k)
 
-        def convexify(A, min_eig=1e-6, strategy='clip'):
-            # eigen decomposition (for symmetric matrices)
-            eigvals, eigvecs = np.linalg.eigh(A)
+        # def convexify(A, min_eig=1e-6, strategy='clip'):
+        #     # eigen decomposition (for symmetric matrices)
+        #     eigvals, eigvecs = np.linalg.eigh(A)
 
-            # clip/flip eigenvalues
-            if strategy == 'clip':
-                new_eigvals = np.clip(eigvals, min_eig, None)
-            elif strategy == 'flip':
-                new_eigvals = np.clip(np.abs(eigvals), min_eig, None)
+        #     # clip/flip eigenvalues
+        #     if strategy == 'clip':
+        #         new_eigvals = np.clip(eigvals, min_eig, None)
+        #     elif strategy == 'flip':
+        #         new_eigvals = np.clip(np.abs(eigvals), min_eig, None)
 
-            # reconstruct matrix
-            A_new = eigvecs @ np.diag(new_eigvals) @ eigvecs.T
+        #     # reconstruct matrix
+        #     A_new = eigvecs @ np.diag(new_eigvals) @ eigvecs.T
 
-            return A_new
+        #     return A_new
 
-        B_k = convexify(B_k, min_eig=1e-8, strategy='flip')
+        # B_k = convexify(B_k, min_eig=1e-8, strategy='flip')
         # ################################################
         all_Xs = np.array([])
         while itr < maxiter:
@@ -369,9 +374,11 @@ class HVPUC(Optimizer):
                 if "matrix G is not positive definite" in str(e):
                     print('Matrix G is not positive definite. Resetting Hessian.')
                     init_scale = 1.
-                    self.QN = QN = BFGSScipy(nx=nx,
+                    self.QN = QN = self.QN_HVP = QN_HVP = BFGSScipy(nx=nx,
                                             exception_strategy='damp_update',
                                             init_scale=init_scale)
+                    
+
 
                     B_k = np.eye(nx)
                     
@@ -517,7 +524,8 @@ class HVPUC(Optimizer):
             # normally use 3 HVPs per step. Incorporate more HVPs at first step
             # NOTE: The next area of investigation. How to pick the number of HVPs and the rank of the update 
 
-            m = 3
+            m = min(nx, self.options['m'])
+            # m = self.options['m']
 
             # Set of HVP directions (inputs)
             S = np.ones((nx, m))
@@ -535,34 +543,47 @@ class HVPUC(Optimizer):
                     S[:, i+1] = Y[:, i]
 
             all_Xs = np.hstack((all_Xs, x_k.reshape(-1,1))) if all_Xs.size else x_k.reshape(-1,1)
-            B_k, results, U = self.AMS3.update_B(B_k, S, Y, x_k, r=m)
-            _success = results['success']
-            Us.append(U)
 
-            QN.update(S[:, 0], Y[:, 0])
-            ams_hess.append(B_k)
+            # B_k, results, U = self.AMS3.update_B(B_k, S, Y, x_k, r=m)
+            # _success = results['success']
+            # Us.append(U)
+            for i in range(m):
+                QN_HVP.update(S[:, i], Y[:, i])
+                if i == 0:
+                    QN.update(S[:, i], Y[:, i])
+
+            B_k = QN_HVP.B_k
+            # ams_hess.append(B_k)
+            ams_hess.append(QN_HVP.B_k)
             qn_hess.append(QN.B_k)
 
-            hvp_base = np.eye(nx)
-            hess = np.zeros_like(hvp_base)
-            for i in range(nx):
-                hess[:, i] = self.hvp(x_k, hvp_base[:, i])
+            ### Old code for computing true hessian ###
+            # hvp_base = np.eye(nx)
+            # hess = np.zeros_like(hvp_base)
+            # for i in range(nx):
+            #     hess[:, i] = self.hvp(x_k, hvp_base[:, i])
+            ### New code for computing true hessian ###
+            hess = self.problem._compute_objective_hessian(x_k)
 
             true_hess.append(hess)
-            bk_obj.append(results['fun'])
-            ams_success.append(_success)
+            # bk_obj.append(results['fun'])
+            # ams_success.append(_success)
 
-            if not _success:
-                print('AMS not successful. Falling back on Quasi-Newton')
+            # if not _success:
+            #     print('AMS not successful. Falling back on Quasi-Newton')
         
-                B_k = QN.B_k * 1.0
-                bk_hist['fail'] = bk_hist.get('fail', 0) + 1
-            elif not is_positive_definite(B_k):
-                print('AMS Returns non PD B_k. Falling back on Quasi-Newton')
-                B_k = QN.B_k * 1.0
-                bk_hist['non-PD'] = bk_hist.get('non-PD', 0) + 1
-            else:
-                bk_hist['success'] = bk_hist.get('success', 0) + 1
+            #     B_k = QN.B_k * 1.0
+            #     bk_hist['fail'] = bk_hist.get('fail', 0) + 1
+            # elif not is_positive_definite(B_k):
+            #     print('AMS Returns non PD B_k. Falling back on Quasi-Newton')
+            #     B_k = QN.B_k * 1.0
+            #     bk_hist['non-PD'] = bk_hist.get('non-PD', 0) + 1
+            # else:
+            #     bk_hist['success'] = bk_hist.get('success', 0) + 1
+
+            bk_obj.append(0)
+            ams_success.append(True)
+            Us.append(0)
 
 
             #######################################################
