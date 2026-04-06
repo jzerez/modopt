@@ -413,7 +413,6 @@ class HVPUC(Optimizer):
             if (not converged) and (not undefined_direction):
                 # Use an inexact LS with l1-penalty and only function evaluations
                 new_f_evals, converged, alpha = self.l1_penalty_line_search(x_k, x_qp, p_k, f_k, g_k)
-
                 nfev += new_f_evals
                 
             if not undefined_direction:
@@ -524,7 +523,11 @@ class HVPUC(Optimizer):
             # normally use 3 HVPs per step. Incorporate more HVPs at first step
             # NOTE: The next area of investigation. How to pick the number of HVPs and the rank of the update 
 
-            m = min(nx, self.options['m'])
+            if self.options['m']:
+                m = min(nx, self.options['m'])
+            else:
+                m = min(nx, 1)
+
             # m = self.options['m']
 
             # Set of HVP directions (inputs)
@@ -550,9 +553,14 @@ class HVPUC(Optimizer):
             for i in range(m):
                 QN_HVP.update(S[:, i], Y[:, i])
                 if i == 0:
-                    QN.update(S[:, i], Y[:, i])
+                    y_k = g_k - g_old
+                    QN.update(S[:, i], y_k)
 
-            B_k = QN_HVP.B_k
+            if self.options['m']:
+                B_k = QN_HVP.B_k
+            else:
+                B_k = QN.B_k
+
             # ams_hess.append(B_k)
             ams_hess.append(QN_HVP.B_k)
             qn_hess.append(QN.B_k)
