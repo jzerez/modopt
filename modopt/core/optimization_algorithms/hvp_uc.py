@@ -9,7 +9,7 @@ from modopt.approximate_hessians import BFGSScipy
 from modopt import CSDLAlphaProblem
 from modopt.utils.general_utils import is_positive_definite
 
-from modopt.core.optimization_algorithms.update_B import AdaptiveMultiSecant3
+from modopt.core.optimization_algorithms.update_B import AdaptiveMultiSecant1, AdaptiveMultiSecant2, AdaptiveMultiSecant3, BlockBFGS
 
 
 class HVPUC(Optimizer):
@@ -101,6 +101,9 @@ class HVPUC(Optimizer):
         self.options.declare('ls_eta_w', default=0.95, types=float)
         self.options.declare('ls_alpha_tol', default=1e-14, types=float)
         self.options.declare('m', default=1, types=int)
+        self.options.declare('normalize_s', default=False, types=bool)
+        self.options.declare('use_exact_hess', default=False, types=bool)
+        self.options.declare('method', default='AMS3', types=str)
 
         self.available_outputs = {
             'major': int,
@@ -146,7 +149,17 @@ class HVPUC(Optimizer):
                               alpha_tol=self.options['ls_alpha_tol'],
                               )
 
-        self.AMS3 = AdaptiveMultiSecant3()
+        if self.options['method'] == 'AMS1':
+            self.AMS = AdaptiveMultiSecant1()
+        if self.options['method'] == 'AMS2':
+            self.AMS = AdaptiveMultiSecant2()
+        if self.options['method'] == 'AMS3':
+            self.AMS = AdaptiveMultiSecant3()
+        if self.options['method'] == 'bBFGS':
+            self.AMS = BlockBFGS()
+        if self.options['method'] == 'iBFGS':
+            self.AMS = None
+
 
     def l1_penalty_line_search(self, x_k, x_qp, p_k, f_k, g_k):
         nx   = self.nx
@@ -248,12 +261,13 @@ class HVPUC(Optimizer):
         # success, non PD
         # fail
         bk_hist = dict()
-        ams_hess = []
-        qn_hess = []
+        approx_hess = []
         true_hess = []
         bk_obj = []
         Us = []
         ams_success = []
+        line_search_itr = []
+        n_hvp = 0
 
         # Assign shorter names to variables and methods
         nx = self.nx
@@ -334,20 +348,20 @@ class HVPUC(Optimizer):
         # ################################################
         # B_k = self.problem._compute_objective_hessian(x_k)
 
-        # def convexify(A, min_eig=1e-6, strategy='clip'):
-        #     # eigen decomposition (for symmetric matrices)
-        #     eigvals, eigvecs = np.linalg.eigh(A)
+        def convexify(A, min_eig=1e-6, strategy='clip'):
+            # eigen decomposition (for symmetric matrices)
+            eigvals, eigvecs = np.linalg.eigh(A)
 
-        #     # clip/flip eigenvalues
-        #     if strategy == 'clip':
-        #         new_eigvals = np.clip(eigvals, min_eig, None)
-        #     elif strategy == 'flip':
-        #         new_eigvals = np.clip(np.abs(eigvals), min_eig, None)
+            # clip/flip eigenvalues
+            if strategy == 'clip':
+                new_eigvals = np.clip(eigvals, min_eig, None)
+            elif strategy == 'flip':
+                new_eigvals = np.clip(np.abs(eigvals), min_eig, None)
 
-        #     # reconstruct matrix
-        #     A_new = eigvecs @ np.diag(new_eigvals) @ eigvecs.T
+            # reconstruct matrix
+            A_new = eigvecs @ np.diag(new_eigvals) @ eigvecs.T
 
-        #     return A_new
+            return A_new
 
         # B_k = convexify(B_k, min_eig=1e-8, strategy='flip')
         # ################################################
@@ -393,14 +407,34 @@ class HVPUC(Optimizer):
             p_k_temp = p_k * 1.
             x_k_temp = x_k * 1.
 
+
+            # Summary of Line Search
+            # make sure we have a valid search direction (search vector isn't tiny, and we have a descent direction)
+            # Use line search:
+            #   If successful, done!
+            #   If not sucessful, use inexact line-search
+            #   If successful BUT obj/grad is not defined:
+            #      Iteratively decrement alpha until we find a valid one
+            #      If not able to find an alpha that isn't ridiculously small:
+            #        Reset hessian
+            #      Else
+            #         Redo line-search with scaled alpha
+            #         If successful:
+            #           Done!
+            #         Else:
+            #            Do inexact line-search
+
+            # If the directional derivative is non-negative OR if the step-size p_k is tiny, use unit step
             if dir_deriv_0 > -2.22e-16 or np.linalg.norm(p_k) <= 2.22e-16:
                 alpha = 1.0
                 mf_new, mfg_new, mf_slope_new, new_f_evals, new_g_evals, converged = f_k, g_k, dir_deriv_0, 1, 1, True
 
+            # Otherwise, use line-search
             else:
                 alpha, mf_new, mfg_new, mf_slope_new, new_f_evals, new_g_evals, converged = LSS.search(
                     x=x_k_temp, p=p_k_temp, f0=f_k, g0=g_k)
 
+            # Check to make sure new x_k is valid (no nan, no inf)
             undefined_direction = False
             if np.isnan(mf_new) or np.isinf(mf_new) or np.isnan(mfg_new).any() or np.isinf(mfg_new).any():
                 undefined_direction = True
@@ -410,6 +444,8 @@ class HVPUC(Optimizer):
                 ngev += new_g_evals
 
             alpha_golden = 0.061803398875
+
+            # If we aren't able to find a good alpha, use inexact line-search
             if (not converged) and (not undefined_direction):
                 # Use an inexact LS with l1-penalty and only function evaluations
                 new_f_evals, converged, alpha = self.l1_penalty_line_search(x_k, x_qp, p_k, f_k, g_k)
@@ -533,7 +569,10 @@ class HVPUC(Optimizer):
             # Set of HVP directions (inputs)
             S = np.ones((nx, m))
             # First HVP direction is the step direction
-            S[:, 0] = d_k[:nx]
+            if self.options['normalize_s'] and self.options['m']:
+                S[:, 0] = d_k[:nx] / np.linalg.norm(d_k[:nx])
+            else:
+                S[:, 0] = d_k[:nx] 
 
             # Set of HVPs (outputs)
             Y = np.ones(S.shape)
@@ -541,29 +580,78 @@ class HVPUC(Optimizer):
             # Krylov sub-space HVPs. the ith HVP is along the direction of the (i-1)th HVP
             for i in range(m):
                 Y[:, i] = self.hvp(x_k, S[:, i]) # Hessian-vector product with the ith column of S (the step taken)
-                ngev += 1
+                n_hvp += 1
                 if i+1 < m:
-                    S[:, i+1] = Y[:, i]
+                    if self.options['normalize_s'] and self.options['m']:
+                        S[:, i+1] = Y[:, i] / np.linalg.norm(Y[:, i])
+                    else:
+                        S[:, i+1] = Y[:, i] 
 
             all_Xs = np.hstack((all_Xs, x_k.reshape(-1,1))) if all_Xs.size else x_k.reshape(-1,1)
 
-            # B_k, results, U = self.AMS3.update_B(B_k, S, Y, x_k, r=m)
-            # _success = results['success']
-            # Us.append(U)
-            for i in range(m):
-                QN_HVP.update(S[:, i], Y[:, i])
-                if i == 0:
-                    y_k = g_k - g_old
-                    QN.update(S[:, i], y_k)
 
-            if self.options['m']:
+
+            # 
+            _success = False
+            U = 0
+            bk_obj_val = 0
+            hess = self.problem._compute_objective_hessian(x_k)
+
+            if np.all(hess == 0):
+                hess = 1e6 * np.eye(nx)
+
+
+            if 'AMS' in self.options['method']:
+                B_k, results, U = self.AMS.update_B(B_k, S, Y, x_k, r=m)
+                _success = results['success']
+                bk_obj_val = results['fun']
+                
+
+            elif self.options['method'] == 'bBFGS':
+                self.AMS.hess = hess
+                B_k, success = self.AMS.update_B(B_k, S, Y, x_k, r=m)
+                _success = success
+
+            elif self.options['method'] == 'iBFGS':
+                for i in range(m):
+                    QN_HVP.update(S[:, i], Y[:, i])
                 B_k = QN_HVP.B_k
-            else:
+
+            elif self.options['method'] == 'Newton':
+                B_k = convexify(hess)
+
+            elif self.options['method'] == 'BFGS':
+                QN.update(S[:, 0], g_k - g_old)
                 B_k = QN.B_k
 
+            
+            # if self.options['m']:
+            #     _success = False
+
+            #     if 'AMS' in self.options['method']: 
+            #         B_k, results, U = self.AMS.update_B(B_k, S, Y, x_k, r=m)
+            #         _success = results['success']
+            #     elif 'BlockBFGS' == self.options['method']:
+            #         B_k = self.AMS.update_B(B_k, S, Y, x_k, r=m)
+            #         _success = True
+            #         U = 0
+
+            #     if not _success or 'inplaceBFGS' == self.options['method']:
+            #         B_k = QN_HVP.B_k                    
+            # else:
+            #     B_k = QN.B_k
+
+
+            # if self.options['m']:
+            #     # if not _success:
+            #     B_k = 
+            # else:
+            #     B_k = QN.B_k
+
+
             # ams_hess.append(B_k)
-            ams_hess.append(QN_HVP.B_k)
-            qn_hess.append(QN.B_k)
+            # ams_hess.append(QN_HVP.B_k)
+            # qn_hess.append(QN.B_k)
 
             ### Old code for computing true hessian ###
             # hvp_base = np.eye(nx)
@@ -571,9 +659,17 @@ class HVPUC(Optimizer):
             # for i in range(nx):
             #     hess[:, i] = self.hvp(x_k, hvp_base[:, i])
             ### New code for computing true hessian ###
-            hess = self.problem._compute_objective_hessian(x_k)
+            # hess = self.problem._compute_objective_hessian(x_k)
+
+            # if self.options['use_exact_hess']:
+            #     B_k = convexify(hess)
+
 
             true_hess.append(hess)
+            approx_hess.append(B_k)
+            bk_obj.append(bk_obj_val)
+            ams_success.append(_success)
+            Us.append(U)
             # bk_obj.append(results['fun'])
             # ams_success.append(_success)
 
@@ -591,7 +687,7 @@ class HVPUC(Optimizer):
 
             bk_obj.append(0)
             ams_success.append(True)
-            Us.append(0)
+            # Us.append(0)
 
 
             #######################################################
@@ -630,13 +726,12 @@ class HVPUC(Optimizer):
             'niter': itr,
             'time': self.total_time,
             'success': tol_satisfied,
-            'bk hist': bk_hist,
-            'ams_hess': ams_hess,
-            'qn_hess': qn_hess,
+            'approx_hess': approx_hess,
             'true_hess': true_hess,
             'bk_obj': bk_obj,
             'U': Us,
             'ams_success': ams_success,
+            'n_hvp': n_hvp,
         }
 
         # Run post-processing for the Optimizer() base class

@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.optimize import minimize
-
+import scipy 
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
@@ -26,7 +26,7 @@ class AdaptiveMultiSecant1():
         _grad = jax.jit(jax.grad(jax_obj, argnums=[0,1]))
         self._grad  = lambda U, V: np.concatenate([dF.ravel() for dF in _grad(U, V)])
         
-        # Multi-secant condition
+        # Multi-secant condition. Replace with penalty term
         def jax_con1(U, V, B, S, Y):
             B_new = B + U @ U.T - V @ V.T
             return jnp.ravel(B_new @ S - Y)
@@ -323,3 +323,188 @@ class AdaptiveMultiSecant3():
         print(f"Success of multi-secant update: {results['success']}")
         self.n_itr += 1
         return B_new, results, U
+    
+
+
+
+# Equivalent to direction 2 on 03-04 Notes 
+class BlockBFGS():
+    def __init__(self):
+        self.save_last = 25
+        self.p     = 1.0 # 1.0 or 2.0. Param for computing distance weighting
+        self.gamma = 1e-2   # Fudge factor for tuning weights. Close to 1 means distance doesn't impact weighting. Close to zero means that normal weighting applies. This term ensures a minimum influence from far away points. 
+        self.all_X = None
+        self.all_S = None
+        self.all_Y = None
+        self.all_m = None   # Stored HVPs per step
+        self.weights = None
+        self.prev_U = None
+        self.B = None
+        self.n_itr = 0
+        self.x0 = None
+        self.tau = 0.5
+        self.hess = None
+        
+
+        # # NOTE: Need to add something here to prevent/catch overflow values of U. 
+        # def jax_obj(U, B, S_all, Y_all, beta, weights):
+        #     # find lowest magnitude of U. 
+        #     # pow = jnp.min(jnp.abs(U))
+        #     pow = 1.0
+        #     obj = jnp.linalg.norm(U/pow @ U.T/pow, ord='fro') * pow**2
+        #     B_new = B + U @ U.T
+        #     c_all = weights*(B_new @ S_all - Y_all)
+
+        #     penalized_obj = beta * obj + jnp.sum(jnp.linalg.norm(c_all, axis=0))
+        #     # penalized_obj = beta * obj + jnp.linalg.norm(c_all, ord='fro')
+        #     return penalized_obj
+
+        # _obj = jax.jit(jax_obj)
+        # self._obj  = lambda U, B, S_all, Y_all, beta, weights: np.float64(_obj(U, B, S_all, Y_all, beta, weights))
+
+        # _grad = jax.jit(jax.grad(jax_obj, argnums=[0]))
+        # self._grad  = lambda U, B, S_all, Y_all, beta, weights: np.asarray(_grad(U, B, S_all, Y_all, beta, weights)[0].ravel())
+
+    def filter_steps(self, tau=0.1, cutoff=True):
+        n, n_steps = self.all_S.shape
+
+        proj = self.all_S.T @ self.all_Y
+        lu, sigma, perm = scipy.linalg.ldl(proj)
+
+
+        keep = np.zeros([n_steps,], dtype=bool)
+
+        for i, s in enumerate(self.all_S.T):
+            if sigma[i, i] >= tau * s.T @ s:
+                keep[i] = True
+
+        nd = np.sum(keep)
+
+        if cutoff and nd > n:
+            vals = np.diag(sigma)
+            idx = np.argsort(vals)[:-n]
+
+            kept_idx = np.where(keep)[0]
+            keep[kept_idx[idx]] = False
+        
+
+        return keep
+    
+    def filter_steps2(self, tau=0.1, cutoff=True):
+        n, n_steps = self.all_S.shape
+
+        D = self.all_S.copy()
+        L = np.zeros((n_steps, n_steps))
+        Sigma = np.zeros((n_steps, n_steps))
+        A = D.T @ self.hess @ D
+        # A = D.T @ self.all_Y
+        A = D.T @ self.all_Y
+        # A = 0.5 * (D.T @ self.all_Y + self.all_Y.T @ D)
+
+        keep = np.zeros([n_steps,], dtype=bool)
+        di = 0
+        for i, s in enumerate(self.all_S.T):
+
+            
+
+            sigma = A[i, i] - np.sum([L[di, j]**2 * Sigma[j, j] for j in range(di)])
+            if sigma >= tau * s.T @ s:
+                Sigma[di, di] = sigma
+                L[di, di] = 1
+                for j in range(i+1, n_steps):
+                    L[j, di] = 1/sigma * (A[j, i] - np.sum([L[di, k] * L[j, k] * Sigma[k, k] for k in range(di)]))
+                di += 1
+                keep[i] = True
+
+        nd = np.sum(keep)
+        # Take the elements of keep that correspond to the n-largest Sigma values
+        if cutoff and nd > n:
+            vals = np.diag(Sigma)[:nd]
+            idx = np.argsort(vals)[:-n]
+
+            kept_idx = np.where(keep)[0]
+            keep[kept_idx[idx]] = False
+        
+        return keep
+
+
+    
+    def update_B(self, B, S, Y, x_k, r=1, tau=0.1):
+        nx, m = S.shape
+
+        if self.hess is None:
+            self.hess = np.eye(nx)
+        
+
+        # NOTE: should we handle r and m separately? Right now we treat them as equal. 
+        # What is optimal relationship between the two? 
+        # r_k+1 >= m_k+1 (Rank of update needs to at least be equal to number of HVPs)
+        # r_k+1 < sum_i m_i (Rank of update needs to be less than the total number of HVPs. Why?)
+        if self.all_S is None:
+            self.all_S = S * 1.0
+            self.all_Y = Y * 1.0
+            self.all_X = x_k.reshape(-1,1) * 1.
+            self.x0 = x_k.reshape(-1,1) * 1.
+            self.weights = np.ones((m,), dtype=np.float64)
+            self.all_m = np.array([m,])
+            r = min(m, nx)
+        else:
+            # # This is requried for when the number of previous steps is less than self.save_last
+            # save_last = min(np.int32(self.all_S.shape[1]/r), self.save_last)
+            # Store history for S, Y, and X
+            self.all_m = np.hstack((m, self.all_m[:self.save_last]))
+            m_total = np.sum(self.all_m)
+
+            
+
+            ri = -1
+            self.all_S = np.hstack((S, self.all_S))
+            while self.all_S.shape[1] > m_total:
+                self.all_S = np.delete(self.all_S, ri, axis=1)
+                
+            self.all_Y = np.hstack((Y, self.all_Y))
+            while self.all_Y.shape[1] > m_total:
+                self.all_Y = np.delete(self.all_Y, ri, axis=1)
+            
+
+            self.all_X = np.hstack((x_k.reshape(-1,1), self.all_X))
+            while self.all_X.shape[1] > self.save_last + 1:
+                self.all_X = np.delete(self.all_X, ri, axis=1)
+
+        
+        steps_to_keep2 = self.filter_steps(self.tau)
+        steps_to_keep = self.filter_steps2(self.tau, True)
+
+        # print(steps_to_keep)
+        # print(steps_to_keep2)
+        # print(np.all(steps_to_keep == steps_to_keep2))
+        nd = np.sum(steps_to_keep)
+
+        success = False
+        self.n_itr += 1
+
+        if nd == 0:
+            print(f'No valid steps found for tau = {self.tau:.2f}')
+            return B, success
+
+
+
+
+        D = self.all_S[:, steps_to_keep]
+        GD = self.hess @ D
+        # GD = self.all_Y[:, steps_to_keep]
+        BD = B @ D
+        
+        A =self.all_S.T @ self.hess @ self.all_S
+        # Do the Block BFGS update
+        try:
+            B_new = B - BD @ scipy.linalg.solve(D.T @ BD, np.identity(nd), assume_a='pos') @ BD.T + GD @ scipy.linalg.solve(D.T @ GD, np.identity(nd), assume_a='pos') @ GD.T
+            # B_new = B - BD @ np.linalg.pinv(D.T @ BD) @ BD.T + GD @ np.linalg.pinv(D.T @ GD) @ GD.T
+            self.B = B_new
+            success = True
+        except scipy.linalg.LinAlgError:
+            print('unable to invert matrix')
+            self.tau += 0.1
+            return B, success
+        
+        return B_new, success
