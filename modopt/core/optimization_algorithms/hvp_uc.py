@@ -577,19 +577,48 @@ class HVPUC(Optimizer):
             # Set of HVPs (outputs)
             Y = np.ones(S.shape)
             
-            # Krylov sub-space HVPs. the ith HVP is along the direction of the (i-1)th HVP
+            # # Krylov sub-space HVPs. the ith HVP is along the direction of the (i-1)th HVP
+            # for i in range(m):
+            #     Y[:, i] = self.hvp(x_k, S[:, i]) # Hessian-vector product with the ith column of S (the step taken)
+            #     n_hvp += 1
+            #     if i+1 < m:
+            #         if self.options['normalize_s'] and self.options['m']:
+            #             S[:, i+1] = Y[:, i] / np.linalg.norm(Y[:, i])
+            #         else:
+            #             S[:, i+1] = Y[:, i] 
+
+            # all_Xs = np.hstack((all_Xs, x_k.reshape(-1,1))) if all_Xs.size else x_k.reshape(-1,1)
+
+            
+            # orthogonal krylov HVPs with filtering and normalization
+            s = d_k[:nx]
+            invalid_idx = np.ones((m, ), dtype=bool)
+
             for i in range(m):
-                Y[:, i] = self.hvp(x_k, S[:, i]) # Hessian-vector product with the ith column of S (the step taken)
-                n_hvp += 1
-                if i+1 < m:
-                    if self.options['normalize_s'] and self.options['m']:
-                        S[:, i+1] = Y[:, i] / np.linalg.norm(Y[:, i])
-                    else:
-                        S[:, i+1] = Y[:, i] 
+                # correct direction, subtract out directions we've already explored 
+                for j in range(i):
+                    s -= np.dot(s, S[:, j]) * S[:, j]
+                
+                s /= np.linalg.norm(s)
+                y = self.hvp(x_k, s)
+                
+                
+                pos_curvature = np.dot(s, y) > 0
 
+                if pos_curvature:
+                    invalid_idx[i] = False
+
+                Y[:, i] = y
+                S[:, i] = s
+                s = y
+
+            # Replace m with the actual number of HVPs used (ie: those corresponding to directions of positive curvature)
+            # I think this is OK. it is akin to throwing out or clipping negative eigenvalues of the hessian 
+            # Ie: we'll just ignore those directions. 
+            m -= np.sum(invalid_idx)
+            Y = np.delete(Y, invalid_idx, axis=1)
+            S = np.delete(S, invalid_idx, axis=1)
             all_Xs = np.hstack((all_Xs, x_k.reshape(-1,1))) if all_Xs.size else x_k.reshape(-1,1)
-
-
 
             # 
             _success = False

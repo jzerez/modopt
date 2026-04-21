@@ -138,7 +138,10 @@ class AdaptiveMultiSecant1():
         # Beta is how much we care about the norm of UU^T. 
         # Here we are saying that the update for B should be dominated by
         # satisfying a weighted sum of past secant conditions.
-        beta = np.min(self.weights) * 1
+        if len(self.weights) == 0:
+            beta = 1
+        else:
+            beta = np.min(self.weights) * 1
         
         # Seed optimizer with previous U matrix, if available. 
         x0 = np.ones(((r1 + r2) * nx,))
@@ -555,8 +558,6 @@ class BlockBFGS():
             # Store history for S, Y, and X
             self.all_m = np.hstack((m, self.all_m[:self.save_last]))
             m_total = np.sum(self.all_m)
-
-            
 
             ri = -1
             self.all_S = np.hstack((S, self.all_S))
