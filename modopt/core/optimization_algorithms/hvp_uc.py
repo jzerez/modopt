@@ -229,7 +229,9 @@ class HVPUC(Optimizer):
 
         return opt_satisfied, opt
 
-    def get_results_dict(self, x_k, f_k, opt, nfev, ngev, niter, time, success):
+    def get_results_dict(self, x_k, f_k, opt, nfev, ngev, niter, time, success, approx_hess,
+                         true_hess, bk_obj, Us, ams_success, n_hvp, err_msg):
+
         results = {'x': x_k,
                    'objective': f_k,
                    'optimality': opt,
@@ -237,7 +239,14 @@ class HVPUC(Optimizer):
                    'ngev': ngev,
                    'niter': niter,
                    'time': time,
-                   'success': success}
+                   'success': success,
+                   'approx_hess': approx_hess,
+                   'true_hess': true_hess,
+                   'bk_obj': bk_obj,
+                   'U': Us,
+                   'ams_success': ams_success,
+                   'n_hvp': n_hvp,
+                   'err_msg': err_msg}
         return results
 
     def solve(self):
@@ -305,7 +314,9 @@ class HVPUC(Optimizer):
         if undefined_proximal_point:
             if np.all(x0 == x_k):
                 print('Initial point provided and proximal point computed were the same and is undefined. Exiting ...')
-                return self.get_results_dict(x_k, f_k, None, 1, 1, 0, time.time() - start_time, False)
+                return self.get_results_dict(x_k, f_k, None, 1, 1, 0, time.time() - start_time,
+                                            False, None, None, None, None, False, 0, 
+                                            'Initial point provided and proximal point computed were the same and is undefined.')
             
             x_k = x0 * 1.
 
@@ -315,10 +326,14 @@ class HVPUC(Optimizer):
 
             if np.isnan(f_k) or np.isinf(f_k):
                 print('Objective value at given initial point and computed proximal point is NaN or Inf. Exiting ...')
-                return self.get_results_dict(x_k, f_k, None, 2, 2, 0, time.time() - start_time, False)
+                return self.get_results_dict(x_k, f_k, None, 2, 2, 0, time.time() - start_time,
+                                                False, None, None, None, None, False, 0, 
+                                                'Objective value at given initial point and computed proximal point is NaN or Inf')
             elif np.any(np.isnan(g_k)) or np.any(np.isinf(g_k)):
                 print('Gradient at given initial point and computed proximal point contains NaN or Inf. Exiting ...')
-                return self.get_results_dict(x_k, f_k, None, 2, 2, 0, time.time() - start_time, False)
+                return self.get_results_dict(x_k, f_k, None, 2, 2, 0, time.time() - start_time,
+                                                    False, None, None, None, None, False, 0, 
+                                                    'Gradient at given initial point and computed proximal point is NaN or Inf')
 
         nfev = 1
         ngev = 1
@@ -514,7 +529,10 @@ class HVPUC(Optimizer):
 
                 if self.successive_undefined_iterations == 2:
                     print('Two successive iterations with unsuccessful search along predicted direction for well-defined points. Terminating ...')
-                    return self.get_results_dict(x_k, f_k, opt, nfev, ngev, itr, time.time() - start_time, False)
+
+                    return self.get_results_dict(x_k, f_k, opt, nfev, ngev, itr, time.time() - start_time,
+                                        False, approx_hess, true_hess, bk_obj, Us,
+                                        ams_success, n_hvp, 'Unsuccessful line search for well-defined points')
      
             elif undefined_direction:
                 self.successive_undefined_iterations = 0
@@ -577,7 +595,7 @@ class HVPUC(Optimizer):
             # Set of HVPs (outputs)
             Y = np.ones(S.shape)
             
-            # # Krylov sub-space HVPs. the ith HVP is along the direction of the (i-1)th HVP
+            # Krylov sub-space HVPs. the ith HVP is along the direction of the (i-1)th HVP
             # for i in range(m):
             #     Y[:, i] = self.hvp(x_k, S[:, i]) # Hessian-vector product with the ith column of S (the step taken)
             #     n_hvp += 1
@@ -595,7 +613,7 @@ class HVPUC(Optimizer):
             invalid_idx = np.ones((m, ), dtype=bool)
 
             for i in range(m):
-                # correct direction, subtract out directions we've already explored 
+                # correct direction by subtracting out directions we've already explored 
                 for j in range(i):
                     s -= np.dot(s, S[:, j]) * S[:, j]
                 
@@ -650,7 +668,7 @@ class HVPUC(Optimizer):
                 B_k = convexify(hess)
 
             elif self.options['method'] == 'BFGS':
-                QN.update(S[:, 0], g_k - g_old)
+                QN.update(d_k[:nx], g_k - g_old)
                 B_k = QN.B_k
 
             
@@ -746,22 +764,9 @@ class HVPUC(Optimizer):
 
         self.total_time = time.time() - start_time
 
-        self.results = {
-            'x': x_k,
-            'objective': f_k,
-            'optimality': opt,
-            'nfev': nfev,
-            'ngev': ngev,
-            'niter': itr,
-            'time': self.total_time,
-            'success': tol_satisfied,
-            'approx_hess': approx_hess,
-            'true_hess': true_hess,
-            'bk_obj': bk_obj,
-            'U': Us,
-            'ams_success': ams_success,
-            'n_hvp': n_hvp,
-        }
+        self.results = self.get_results_dict(x_k, f_k, opt, nfev, ngev, itr, self.total_time,
+                                             tol_satisfied, approx_hess, true_hess, bk_obj, Us,
+                                             ams_success, n_hvp, '')
 
         # Run post-processing for the Optimizer() base class
         self.run_post_processing()
