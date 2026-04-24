@@ -1,3 +1,4 @@
+import numpy as np
 
 # From OpenMDAO (for printing check_first_derivatives())
 def pad_name(name, pad_num=10, quotes=False):
@@ -32,6 +33,12 @@ def pad_name(name, pad_num=10, quotes=False):
         else:
             return '{0}'.format(name)
         
+def is_positive_definite(a):
+    try:
+        _ = np.linalg.cholesky(a)
+        return True
+    except np.linalg.LinAlgError:
+        return False
 
 import os, sys
 
