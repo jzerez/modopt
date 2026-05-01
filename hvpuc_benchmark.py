@@ -16,7 +16,8 @@ import traceback
 
 # algs = ['OpenSQP', 'HVPUC', 'HVPUC1', 'HVPUC2', 'nHVPUC1', 'nHVPUC2', 'zHVPUC', ]
 # algs = ['OpenSQP', 'BFGS', 'Newton', 'iBFGS-1-n', 'iBFGS-2-n', 'bBFGS-1-n', 'bBFGS-2-n']
-algs = ['OpenSQP', 'BFGS', 'iBFGS-1', 'iBFGS-2', 'iBFGS-4', 'bBFGS-2', 'bBFGS-4', 'AMS1-1', 'AMS1-2', 'AMS1-4', 'AMS3-1', 'AMS3-2' , 'AMS3-4']
+# algs = ['OpenSQP', 'BFGS', 'iBFGS-1', 'iBFGS-2', 'iBFGS-4', 'bBFGS-2', 'bBFGS-4', 'AMS1-1', 'AMS1-2', 'AMS1-4', 'AMS3-1', 'AMS3-2' , 'AMS3-4']
+algs = ['OpenSQP', 'bBFGS-1', 'bBFGS-2', 'bBFGS-4', 'iBFGS-1', 'iBFGS-2', 'iBFGS-4']
 performance = {}
 history = {}
 time_loop = 1
@@ -45,6 +46,8 @@ remove_probs = ['DMN15102LS',
                 'VAREIGVL',
                 'LUKSAN11LS',
                 'GROWTHLS']
+
+# hard_probs = ['BOXBODLS', 'CERI651BLS', 'CERI651CLS', 'CERI651DLS', 'CLIFF', 'DANWOODLS', 'DJTL']
 
 iteration_categories = ['n_iter', 'n_fev', 'n_gev', 'n_hvpev', 'avg_ls_itr']
 
@@ -82,20 +85,25 @@ plot_on = True
 save_figs = True
 save_results = True
 show_figs = False
+max_probs = 999
+max_prob_size = 60
 # normalize_step = False
-run_name = 'ams1_benchmark_krylov2'
+run_name = 'debug_bbfgs'
 save_eval_df = True
 save_errs = True
 err_hist = {}
 
+
+run_dir = './hvp_outputs/' + run_name
+
 if save_results or save_figs or save_eval_df:
     try:
-        os.mkdir(run_name)
+        os.mkdir(run_dir)
     except FileExistsError as e:
         print('Directory for run name: ', run_name, 'Already exsists')
 
 if save_eval_df:
-    with open(run_name + '/' + run_name + '_evals.csv', 'w') as f:
+    with open(run_dir + '/' + run_name + '_evals.csv', 'w') as f:
         f.write('problem,')
         for alg in algs:
             for category in iteration_categories: 
@@ -104,14 +112,14 @@ if save_eval_df:
 
 if save_errs:
     for alg in algs:
-        with open(run_name + '/' + run_name + '_' + alg + '_errors.txt', 'w') as f:
+        with open(run_dir + '/' + run_name + '_' + alg + '_errors.txt', 'w') as f:
             f.write(f'Error log for {alg}\n')
             f.write('----------------\n')
 
 run_start = False
 for i, prob_name in enumerate(valid_prob_names):
-    # if i > 15:
-    #     break
+    if i > max_probs:
+        break
     
     # if (not prob_name == 'HIELOW') and (not run_start):
     #     continue
@@ -132,13 +140,13 @@ for i, prob_name in enumerate(valid_prob_names):
     del prob
     gc.collect()
     prob = CUTEstProblem(cutest_problem=pc_prob)
-    if prob.nx > 40:
+    if prob.nx > max_prob_size:
         print(f'Skipping problem {prob_name} with nx={prob.nx} > 20')
         continue
     maxiter=250
 
     if save_eval_df:
-        with open(run_name + '/' + run_name + '_evals.csv', 'a') as f:
+        with open(run_dir + '/' + run_name + '_evals.csv', 'a') as f:
             f.write(prob_name + ',')
 
     print(i, prob_name)
@@ -191,8 +199,8 @@ for i, prob_name in enumerate(valid_prob_names):
 
 
                     options = {'maxiter': maxiter, 'opt_tol': 1.22e-4, 'm': m, 'normalize_s': normalized, 'use_exact_hess':method=='Newton', 'method': method}
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        results = HVPUC(prob, **options, recording=False, turn_off_outputs=True).solve()
+                    # with contextlib.redirect_stdout(io.StringIO()):
+                    results = HVPUC(prob, **options, recording=False, turn_off_outputs=True).solve()
                     if plot_on:
                         ax = axs[-1]
                         ax.text(0.1, 0.85 - 0.25*alg_count, f'{alg}\nFinal Objective: {results["objective"]:.2e}\nSuccess: {results["success"]}\nIterations: {results["niter"]}\n x*: {np.round(results["x"], 3)}',
@@ -290,7 +298,7 @@ for i, prob_name in enumerate(valid_prob_names):
             if not success:
                 if niter == 250:
                     if save_errs:
-                        with open(run_name + '/' + run_name + '_' + alg + '_errors.txt', 'a') as f:
+                        with open(run_dir + '/' + run_name + '_' + alg + '_errors.txt', 'a') as f:
                             f.write(f'\n ERROR FOR {prob_name}: Iteration Limit Reached\n')
                     err_hist[alg, 'max_iter'] = 1 + err_hist.get((alg, 'max_iter'), 0)
                 else:
@@ -298,18 +306,20 @@ for i, prob_name in enumerate(valid_prob_names):
                         results['err_msg'] = f'OpenSQP Error. Invalid Objective: {np.isnan(results["objective"]) or np.isinf(results["objective"])}'
                     err_hist[alg, results['err_msg']] = 1 + err_hist.get((alg, results['err_msg']), 0)
                     if save_errs:
-                        with open(run_name + '/' + run_name + '_' + alg + '_errors.txt', 'a') as f:
+                        with open(run_dir + '/' + run_name + '_' + alg + '_errors.txt', 'a') as f:
                             f.write(f'\n ERROR FOR {prob_name}: {results["err_msg"]}')
         except Exception as e:
 
             print(False)
             print(f'Error: {e}')
+            # raise e
+
             err_type = type(e).__name__
             val = err_hist.get((alg, err_type), 0)
             err_hist[alg, err_type] = val + 1
 
             if save_errs:
-                with open(run_name + '/' + run_name + '_' + alg + '_errors.txt', 'a') as f:
+                with open(run_dir + '/' + run_name + '_' + alg + '_errors.txt', 'a') as f:
                     f.write(f'\nERROR FOR {prob_name}: {err_type}\n')
                     f.write(traceback.format_exc())
 
@@ -337,7 +347,7 @@ for i, prob_name in enumerate(valid_prob_names):
 
         # Write algorithm performacne to df
         if save_eval_df:
-            with open(run_name + '/' + run_name + '_evals.csv', 'a') as f:
+            with open(run_dir + '/' + run_name + '_evals.csv', 'a') as f:
                 # ['n_iter', 'n_fev', 'n_gev', 'n_hvpev', 'avg_ls_itr']
                 avg_line_search = (o_evals + g_evals) * 0.5 / niter
                 row = [niter, o_evals, g_evals, hvp_evals, np.round(avg_line_search, 3)]
@@ -346,11 +356,11 @@ for i, prob_name in enumerate(valid_prob_names):
                 f.write(',')
 
     if save_eval_df:
-        with open(run_name + '/' + run_name + '_evals.csv', 'a') as f:
+        with open(run_dir + '/' + run_name + '_evals.csv', 'a') as f:
             f.write('\n')
 
     if save_figs: 
-        fig.savefig(run_name + '/' + prob_name + '_' + run_name + '.png')
+        fig.savefig(run_dir + '/' + prob_name + '_' + run_name + '.png')
         if show_figs:
             plt.show(block=True)
         else:
@@ -358,7 +368,7 @@ for i, prob_name in enumerate(valid_prob_names):
 
 if save_errs:
     for alg in algs:
-        with open(run_name + '/' + run_name + '_' + alg + '_errors.txt', 'a') as f:
+        with open(run_dir + '/' + run_name + '_' + alg + '_errors.txt', 'a') as f:
             f.write('\n SUMMARY STATS: \n')
             for key, val in err_hist.items():
                 if key[0] == alg:
@@ -372,6 +382,6 @@ print(f'Benchmark complete. Elapsed Time: {(time.time() - t0):.3f}')
 
 if save_results:
     from modopt.benchmarking import plot_performance_profiles
-    with open(run_name + '/hvp_benchmark_' + run_name + '.pkl', 'wb') as f:
+    with open(run_dir + '/hvp_benchmark_' + run_name + '.pkl', 'wb') as f:
         pickle.dump(performance, f)
-    plot_performance_profiles(performance, save_figname=run_name + '/performance_' + run_name + '.pdf')
+    plot_performance_profiles(performance, save_figname=run_dir + '/performance_' + run_name + '.pdf', show_plot=show_figs)

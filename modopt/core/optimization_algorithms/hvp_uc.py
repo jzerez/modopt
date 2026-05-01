@@ -122,17 +122,18 @@ class HVPUC(Optimizer):
         }
 
     def setup(self):
+        self.BFGS_exception_strategy = 'skip_update'
         # self.setup_constraints()
         nx   = self.nx
 
         self.successive_undefined_iterations = 0
         
         self.QN = BFGSScipy(nx=nx,
-                            exception_strategy='damp_update',
+                            exception_strategy=self.BFGS_exception_strategy,
                             init_scale=1.0)
         
         self.QN_HVP = BFGSScipy(nx=nx,
-                            exception_strategy='damp_update',
+                            exception_strategy=self.BFGS_exception_strategy,
                             init_scale=1.0)
             
         self.MF = UCMerit(nx=nx,
@@ -159,6 +160,9 @@ class HVPUC(Optimizer):
             self.AMS = BlockBFGS()
         if self.options['method'] == 'iBFGS':
             self.AMS = None
+
+
+        
 
 
     def l1_penalty_line_search(self, x_k, x_qp, p_k, f_k, g_k):
@@ -403,11 +407,12 @@ class HVPUC(Optimizer):
                 if "matrix G is not positive definite" in str(e):
                     print('Matrix G is not positive definite. Resetting Hessian.')
                     init_scale = 1.
+
+                    # Can do 'skip_update' or 'damp_update'
                     self.QN = QN = self.QN_HVP = QN_HVP = BFGSScipy(nx=nx,
-                                            exception_strategy='damp_update',
+                                            exception_strategy=self.BFGS_exception_strategy,
                                             init_scale=init_scale)
                     
-
 
                     B_k = np.eye(nx)
                     
@@ -523,7 +528,7 @@ class HVPUC(Optimizer):
                 if self.successive_undefined_iterations == 1:
                     print('No points along the search direction is well-defined. Resetting Hessian.')
                     self.QN = QN = BFGSScipy(nx=nx,
-                                             exception_strategy='damp_update',
+                                             exception_strategy=self.BFGS_exception_strategy,
                                              init_scale=1.)
                     continue
 
@@ -621,7 +626,7 @@ class HVPUC(Optimizer):
                 y = self.hvp(x_k, s)
                 
                 
-                pos_curvature = np.dot(s, y) > 0
+                pos_curvature = np.dot(s, y) > 1e-4
 
                 if pos_curvature:
                     invalid_idx[i] = False
@@ -648,7 +653,7 @@ class HVPUC(Optimizer):
                 hess = 1e6 * np.eye(nx)
 
 
-            if 'AMS' in self.options['method']:
+            if 'AMS' in self.options['method'] and m > 0:
                 B_k, results, U = self.AMS.update_B(B_k, S, Y, x_k, r=m)
                 _success = results['success']
                 bk_obj_val = results['fun']
@@ -657,10 +662,18 @@ class HVPUC(Optimizer):
             elif self.options['method'] == 'bBFGS':
                 self.AMS.hess = hess
                 B_k, success = self.AMS.update_B(B_k, S, Y, x_k, r=m)
+
+                for i in range(m-1, -1, -1):
+                    QN_HVP.update(S[:, i], Y[:, i])
+
+                bk_ibfgs = QN_HVP.B_k
+
+                print(f'Error for iBFGS: {np.linalg.norm(bk_ibfgs - hess)}')
+                print(f'Error for bBFGS: {np.linalg.norm(B_k - hess)}')
                 _success = success
 
             elif self.options['method'] == 'iBFGS':
-                for i in range(m):
+                for i in range(m-1, -1, -1):
                     QN_HVP.update(S[:, i], Y[:, i])
                 B_k = QN_HVP.B_k
 

@@ -22,7 +22,7 @@ class AdaptiveMultiSecant1():
     #   Our secant conditions
     #   a positive definite hessian update 
     def __init__(self):
-        self.save_last = 25
+        self.save_last = 0
         self.p     = 1.0 # 1.0 or 2.0. Param for computing distance weighting
         self.gamma = 1e-2   # Fudge factor for tuning weights. Close to 1 means distance doesn't impact weighting. Close to zero means that normal weighting applies. This term ensures a minimum influence from far away points. 
         self.all_X = None
@@ -128,7 +128,7 @@ class AdaptiveMultiSecant1():
             dX = x_k.reshape(-1,1) - self.all_X
             distance = np.linalg.norm(dX, axis=0)
             self.weights = np.repeat(1.0 / (1.0 + distance**self.p) / np.exp(distance), self.all_m)
-            r = max(min(m_total, nx, 10), 2)
+            r = max(min(m_total, nx, 10), 1)
 
         r1 = r
         r2 = r
@@ -151,10 +151,11 @@ class AdaptiveMultiSecant1():
         # Idea: seed U and V based on the previous value of the other. U_k+1 = V_k and vice versa. 
         if not (self.prev_U is None):
             nu = self.prev_U.shape[1]
-            x0[:nu*nx] = np.reshape(self.prev_U, (nu*nx))
+            x0[0:min(r1, nu)*nx] = np.reshape(self.prev_U, (nu*nx))[:min(nu, r1) * nx]
 
+        if not (self.prev_V is None):
             nv = self.prev_V.shape[1]
-            x0[nu*nx] = np.reshape(self.prev_V, (nv*nx))
+            x0[r1*nx:r1*nx + min(r2, nv)*nx] = np.reshape(self.prev_V, (nv*nx))[:min(nv, r2) * nx]
 
 
         if self.prev_B is None:
@@ -195,11 +196,14 @@ class AdaptiveMultiSecant1():
 
         if np.linalg.matrix_rank(U) < U.shape[1]:
             print('U is singular!')
+        else:
+            self.prev_U = U
 
         if np.linalg.matrix_rank(V) < V.shape[1]:
             print('V is Singular!')
+        else:
+            self.prev_V = V
 
-        B_new = B + U @ U.T - V @ V.T
         if results['success']:
             
             B_new = B + U @ U.T - V @ V.T
@@ -365,7 +369,7 @@ class AdaptiveMultiSecant3():
             dX = x_k.reshape(-1,1) - self.all_X
             distance = np.linalg.norm(dX, axis=0)
             self.weights = np.repeat(1.0 / (1.0 + distance**self.p) / np.exp(distance), self.all_m)
-            r = max(min(m_total, nx, 10), 2)
+            r = max(min(m_total, nx, 10), 1)
             # r = 10
             # self.weights = np.repeat(1.0 / np.exp(distance*self.p), r)
         if self.n_itr > self.save_last:
@@ -434,7 +438,7 @@ class AdaptiveMultiSecant3():
 # Equivalent to direction 2 on 03-04 Notes 
 class BlockBFGS():
     def __init__(self):
-        self.save_last = 25
+        self.save_last = 0
         self.p     = 1.0 # 1.0 or 2.0. Param for computing distance weighting
         self.gamma = 1e-2   # Fudge factor for tuning weights. Close to 1 means distance doesn't impact weighting. Close to zero means that normal weighting applies. This term ensures a minimum influence from far away points. 
         self.all_X = None
@@ -446,7 +450,7 @@ class BlockBFGS():
         self.B = None
         self.n_itr = 0
         self.x0 = None
-        self.tau = 0.5
+        self.tau = 1e-4
         self.hess = None
         
 
@@ -576,6 +580,9 @@ class BlockBFGS():
         
         steps_to_keep2 = self.filter_steps(self.tau)
         steps_to_keep = self.filter_steps2(self.tau, True)
+
+        if not (np.sum(steps_to_keep) == len(steps_to_keep)):
+            print('hi')
 
         # print(steps_to_keep)
         # print(steps_to_keep2)
