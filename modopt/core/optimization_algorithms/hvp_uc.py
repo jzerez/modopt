@@ -403,7 +403,10 @@ class HVPUC(Optimizer):
                 if "matrix G is not positive definite" in str(e):
                     print('Matrix G is not positive definite. Resetting Hessian.')
                     init_scale = 1.
-                    self.QN = QN = self.QN_HVP = QN_HVP = BFGSScipy(nx=nx,
+                    self.QN = QN = BFGSScipy(nx=nx,
+                                            exception_strategy='damp_update',
+                                            init_scale=init_scale)
+                    self.QN_HVP = QN_HVP = BFGSScipy(nx=nx,
                                             exception_strategy='damp_update',
                                             init_scale=init_scale)
                     
@@ -525,6 +528,10 @@ class HVPUC(Optimizer):
                     self.QN = QN = BFGSScipy(nx=nx,
                                              exception_strategy='damp_update',
                                              init_scale=1.)
+                    self.QN_HVP = QN_HVP = BFGSScipy(nx=nx,
+                                            exception_strategy='damp_update',
+                                            init_scale=init_scale)
+                    
                     continue
 
                 if self.successive_undefined_iterations == 2:
