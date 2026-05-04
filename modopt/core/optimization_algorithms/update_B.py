@@ -141,14 +141,15 @@ class AdaptiveMultiSecant1():
         if len(self.weights) == 0:
             beta = 1
         else:
-            beta = np.min(self.weights) * 1
+            beta = np.min(self.weights) * 0.001
         
         # Seed optimizer with previous U matrix, if available. 
         x0 = np.ones(((r1 + r2) * nx,))
         x0[:r1*nx] = 2
 
 
-        # Idea: seed U and V based on the previous value of the other. U_k+1 = V_k and vice versa. 
+        # U and V represent sets of dyads. U adds new curvature (from latest batch of y) and V removes curvature (from last batch)
+        # U analagous to Y, V analagous to B_k S
         if not (self.prev_U is None):
             nu = self.prev_U.shape[1]
             x0[0:min(r1, nu)*nx] = np.reshape(self.prev_U, (nu*nx))[:min(nu, r1) * nx]
@@ -203,6 +204,9 @@ class AdaptiveMultiSecant1():
             print('V is Singular!')
         else:
             self.prev_V = V
+
+        if 'Positive directional' in results['message']:
+            print('inner optimization cannot find descent direction')
 
         if results['success']:
             
@@ -382,7 +386,7 @@ class AdaptiveMultiSecant3():
         # Beta is how much we care about the norm of UU^T. 
         # Here we are saying that the update for B should be dominated by
         # satisfying a weighted sum of past secant conditions.
-        beta = np.min(self.weights) * 0.1
+        beta = np.min(self.weights) * 0.001
         
         # Seed optimizer with previous U matrix, if available. 
         x0 = np.ones((r*nx,))
@@ -591,10 +595,12 @@ class BlockBFGS():
 
         success = False
         self.n_itr += 1
+        msg = 'success'
 
         if nd == 0:
-            print(f'No valid steps found for tau = {self.tau:.2f}')
-            return B, success
+            msg = f'No valid steps found for tau = {self.tau:.2f}'
+            print(msg)
+            return B, success, msg
 
 
 
@@ -612,8 +618,9 @@ class BlockBFGS():
             self.B = B_new
             success = True
         except scipy.linalg.LinAlgError:
-            print('unable to invert matrix')
+            msg = 'unable to invert matrix'
+            print(msg)
             self.tau += 0.1
-            return B, success
+            return B, success, msg
         
-        return B_new, success
+        return B_new, success, msg
