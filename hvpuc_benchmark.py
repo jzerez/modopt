@@ -13,11 +13,16 @@ import time
 import matplotlib.pyplot as plt
 import os
 import traceback
+from hist import get_list_hist
+
+# TODOs:
+# initialize with many hvps at first step, then do normal BFGS
+# test damped vs skip. Recover superiority over sqp (damped udates, apply hvp after iter10)
 
 # algs = ['OpenSQP', 'HVPUC', 'HVPUC1', 'HVPUC2', 'nHVPUC1', 'nHVPUC2', 'zHVPUC', ]
 # algs = ['OpenSQP', 'BFGS', 'Newton', 'iBFGS-1-n', 'iBFGS-2-n', 'bBFGS-1-n', 'bBFGS-2-n']
 # algs = ['OpenSQP', 'BFGS', 'iBFGS-1', 'iBFGS-2', 'iBFGS-4', 'bBFGS-2', 'bBFGS-4', 'AMS1-1', 'AMS1-2', 'AMS1-4', 'AMS3-1', 'AMS3-2' , 'AMS3-4']
-algs = ['OpenSQP', 'bBFGS-1', 'bBFGS-2', 'bBFGS-4', 'iBFGS-1', 'iBFGS-2', 'iBFGS-4']
+algs = ['OpenSQP', 'BFGS', 'iBFGS-1', 'iBFGS-2', 'iBFGS-4', 'iBFGS-10', 'iBFGS-25']
 performance = {}
 history = {}
 time_loop = 1
@@ -48,6 +53,33 @@ remove_probs = ['DMN15102LS',
                 'GROWTHLS']
 
 # hard_probs = ['BOXBODLS', 'CERI651BLS', 'CERI651CLS', 'CERI651DLS', 'CLIFF', 'DANWOODLS', 'DJTL']
+
+# Problems originally solved by SQP but not iBFGS
+# target_probs = ['BENNETT5LS', 'BOXBODLS', 'BROWNBS', 'CERI651CLS', 'CERI651DLS', 'COOLHANSLS', 'DEVGLA1', 'ERRINROS', 'KIRBY2LS', 'LRCOVTYPE', 'LUKSAN12LS', 'LUKSAN13LS', 'LUKSAN14LS', 'LUKSAN15LS', 'LUKSAN16LS', 'LUKSAN22LS', 'MANCINO', 'METHANL8LS', 'MEYER3', 'MGH10LS', 'MGH10SLS', 'QING', 'ROSZMAN1LS', 'SENSORS', 'THURBERLS']
+# target_probs = ['LRCOVTYPE',]
+# Problems originally not solved by SQP
+# target_probs = ['CERI651ALS', 'CERI651BLS', 'CHWIRUT1LS', 'CLIFF', 'DIAMON2DLS', 'DIAMON3DLS', 'DJTL', 'FBRAIN3LS', 'HEART6LS', 'HEART8LS', 'HIELOW', 'HYDC20LS', 'HYDCAR6LS', 'LUKSAN17LS', 'MARATOSB', 'RAT42LS', 'SSI', 'VESUVIOLS']
+
+# Problems originally not solved by iBFGS
+# target_probs = ['BENNETT5LS', 'BOXBODLS', 'BROWNBS', 'CERI651ALS', 'CERI651BLS', 'CERI651CLS', 'CERI651DLS', 'CHWIRUT1LS', 'CLIFF', 'COOLHANSLS', 'DEVGLA1', 'DIAMON2DLS', 'DIAMON3DLS', 'DJTL', 'ERRINROS', 'FBRAIN3LS', 'HEART6LS', 'HEART8LS', 'HIELOW', 'HYDC20LS', 'HYDCAR6LS', 'KIRBY2LS', 'LRCOVTYPE', 'LUKSAN12LS', 'LUKSAN13LS', 'LUKSAN14LS', 'LUKSAN15LS', 'LUKSAN16LS', 'LUKSAN17LS', 'LUKSAN22LS', 'MANCINO', 'MARATOSB', 'METHANL8LS', 'MEYER3', 'MGH10LS', 'MGH10SLS', 'QING', 'ROSZMAN1LS', 'SENSORS', 'SSI', 'THURBERLS']
+
+# Problems originally not solved by iBFGS or SQP
+# target_probs = set(['BENNETT5LS', 'BOXBODLS', 'BROWNBS', 'CERI651ALS', 'CERI651BLS', 'CERI651CLS', 'CERI651DLS', 'CHWIRUT1LS', 'CLIFF', 'COOLHANSLS', 'DEVGLA1', 'DIAMON2DLS', 'DIAMON3DLS', 'DJTL', 'ERRINROS', 'FBRAIN3LS', 'HEART6LS', 'HEART8LS', 'HIELOW', 'HYDC20LS', 'HYDCAR6LS', 'KIRBY2LS', 'LRCOVTYPE', 'LUKSAN12LS', 'LUKSAN13LS', 'LUKSAN14LS', 'LUKSAN15LS', 'LUKSAN16LS', 'LUKSAN17LS', 'LUKSAN22LS', 'MANCINO', 'MARATOSB', 'METHANL8LS', 'MEYER3', 'MGH10LS', 'MGH10SLS', 'QING', 'ROSZMAN1LS', 'SENSORS', 'SSI', 'THURBERLS' ,'CERI651ALS', 'CERI651BLS', 'CHWIRUT1LS', 'CLIFF', 'DIAMON2DLS', 'DIAMON3DLS', 'DJTL', 'FBRAIN3LS', 'HEART6LS', 'HEART8LS', 'HIELOW', 'HYDC20LS', 'HYDCAR6LS', 'LUKSAN17LS', 'MARATOSB', 'RAT42LS', 'SSI', 'VESUVIOLS'])
+
+target_probs = []
+
+# Probs where secant methods fail
+# target_probs = [
+#     'BENNETT5LS', 'BOXBODLS', 'BROWNBS', 'CERI651ALS', 'CERI651BLS', 
+#     'CERI651CLS', 'CERI651ELS', 'CHNRSNBM', 'CLIFF', 'COOLHANSLS', 
+#     'DEVGLA1', 'DIAMON2DLS', 'DIAMON3DLS', 'DJTL', 'ERRINROS', 
+#     'FBRAIN3LS', 'HEART6LS', 'HEART8LS', 'HIELOW', 'HYDC20LS', 
+#     'HYDCAR6LS', 'KIRBY2LS', 'LRCOVTYPE', 'LUKSAN12LS', 'LUKSAN13LS', 
+#     'LUKSAN14LS', 'LUKSAN15LS', 'LUKSAN16LS', 'LUKSAN17LS', 'LUKSAN22LS', 
+#     'MANCINO', 'MARATOSB', 'METHANL8LS', 'MEYER3', 'MGH10LS', 
+#     'MGH10SLS', 'PALMER1C', 'QING', 'RAT42LS', 'ROSZMAN1LS', 
+#     'SENSORS', 'SSI', 'THURBERLS', 'VIBRBEAM'
+# ]
 
 iteration_categories = ['n_iter', 'n_fev', 'n_gev', 'n_hvpev', 'avg_ls_itr']
 
@@ -86,9 +118,10 @@ save_figs = True
 save_results = True
 show_figs = False
 max_probs = 999
-max_prob_size = 60
+max_prob_size = 100
+min_prob_size = 0
 # normalize_step = False
-run_name = 'debug_bbfgs'
+run_name = 'ibfgs_baseline6_50'
 save_eval_df = True
 save_errs = True
 err_hist = {}
@@ -117,9 +150,13 @@ if save_errs:
             f.write('----------------\n')
 
 run_start = False
+n_probs_solved = int(0)
 for i, prob_name in enumerate(valid_prob_names):
-    if i > max_probs:
+    if n_probs_solved > max_probs:
         break
+    
+    if target_probs and (not prob_name in target_probs):
+        continue
     
     # if (not prob_name == 'HIELOW') and (not run_start):
     #     continue
@@ -141,9 +178,15 @@ for i, prob_name in enumerate(valid_prob_names):
     gc.collect()
     prob = CUTEstProblem(cutest_problem=pc_prob)
     if prob.nx > max_prob_size:
-        print(f'Skipping problem {prob_name} with nx={prob.nx} > 20')
+        print(f'Skipping problem {prob_name} with nx={prob.nx} > {max_prob_size}')
         continue
-    maxiter=250
+
+    if prob.nx < min_prob_size:
+        print(f'Skipping problem {prob_name} with nx={prob.nx} < {min_prob_size}')
+        continue
+
+    maxiter=500
+    n_probs_solved += 1
 
     if save_eval_df:
         with open(run_dir + '/' + run_name + '_evals.csv', 'a') as f:
@@ -176,9 +219,10 @@ for i, prob_name in enumerate(valid_prob_names):
                     with contextlib.redirect_stdout(io.StringIO()):
                         options = {'maxiter': maxiter, 'opt_tol': 1.22e-4}
                         results = OpenSQP(prob, **options, recording=False, turn_off_outputs=True).solve()
+                        sqp_pass = results['success']
                         if plot_on:
                             # Record final performance metrics: nubmer of iterations, value of objective function, etc.
-                            ax.text(0.1, 1.0, f'OPEN SQP\nFinal Objective: {results["objective"]:.2e}\nSuccess: {results["success"]}\nIterations: {results["niter"]}\n x*: {np.round(results["x"], 3)}',
+                            ax.text(0.1, 1.0, f'OPEN SQP\nFinal Objective: {results["objective"]:.2e}\nSuccess: {results["success"]}\nIterations: {results["niter"]}\n x*: {np.round(results["x"], 3)}\n opt: {results["optimality"]}',
                                     horizontalalignment='left', verticalalignment='top', fontsize=8
                                     )
                 else:
@@ -201,11 +245,13 @@ for i, prob_name in enumerate(valid_prob_names):
                     options = {'maxiter': maxiter, 'opt_tol': 1.22e-4, 'm': m, 'normalize_s': normalized, 'use_exact_hess':method=='Newton', 'method': method}
                     # with contextlib.redirect_stdout(io.StringIO()):
                     results = HVPUC(prob, **options, recording=False, turn_off_outputs=True).solve()
+                    hvp_pass = results['success']
                     if plot_on:
                         ax = axs[-1]
                         ax.text(0.1, 0.85 - 0.25*alg_count, f'{alg}\nFinal Objective: {results["objective"]:.2e}\nSuccess: {results["success"]}\nIterations: {results["niter"]}\n x*: {np.round(results["x"], 3)}',
                                 horizontalalignment='left', verticalalignment='top', fontsize=8
                             )
+                    get_list_hist(results['inner_opt_msgs'])
                     if plot_on:
                         # Plot Objective value of U
                         # ax = axs[0]
@@ -296,7 +342,7 @@ for i, prob_name in enumerate(valid_prob_names):
             
 
             if not success:
-                if niter == 250:
+                if niter == maxiter:
                     if save_errs:
                         with open(run_dir + '/' + run_name + '_' + alg + '_errors.txt', 'a') as f:
                             f.write(f'\n ERROR FOR {prob_name}: Iteration Limit Reached\n')
@@ -336,6 +382,7 @@ for i, prob_name in enumerate(valid_prob_names):
             
             feasibility = 1e6
             niter = 1e6
+        
 
         performance[prob.problem_name, alg] = {'time': opt_time,
                                                'success': success,

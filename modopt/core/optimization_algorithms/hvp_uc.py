@@ -122,7 +122,7 @@ class HVPUC(Optimizer):
         }
 
     def setup(self):
-        self.BFGS_exception_strategy = 'skip_update'
+        self.BFGS_exception_strategy = 'damp_update'
         # self.setup_constraints()
         nx   = self.nx
 
@@ -160,9 +160,6 @@ class HVPUC(Optimizer):
             self.AMS = BlockBFGS()
         if self.options['method'] == 'iBFGS':
             self.AMS = None
-
-
-        
 
 
     def l1_penalty_line_search(self, x_k, x_qp, p_k, f_k, g_k):
@@ -234,7 +231,7 @@ class HVPUC(Optimizer):
         return opt_satisfied, opt
 
     def get_results_dict(self, x_k, f_k, opt, nfev, ngev, niter, time, success, approx_hess,
-                         true_hess, bk_obj, Us, ams_success, n_hvp, err_msg):
+                         true_hess, bk_obj, Us, ams_success, n_hvp, inner_opt_msgs, err_msg):
 
         results = {'x': x_k,
                    'objective': f_k,
@@ -250,6 +247,7 @@ class HVPUC(Optimizer):
                    'U': Us,
                    'ams_success': ams_success,
                    'n_hvp': n_hvp,
+                   'inner_opt_msgs': inner_opt_msgs,
                    'err_msg': err_msg}
         return results
 
@@ -276,6 +274,7 @@ class HVPUC(Optimizer):
         bk_hist = dict()
         approx_hess = []
         true_hess = []
+        inner_opt_msgs = []
         bk_obj = []
         Us = []
         ams_success = []
@@ -319,7 +318,7 @@ class HVPUC(Optimizer):
             if np.all(x0 == x_k):
                 print('Initial point provided and proximal point computed were the same and is undefined. Exiting ...')
                 return self.get_results_dict(x_k, f_k, None, 1, 1, 0, time.time() - start_time,
-                                            False, None, None, None, None, False, 0, 
+                                            False, None, None, None, None, False, 0, None,
                                             'Initial point provided and proximal point computed were the same and is undefined.')
             
             x_k = x0 * 1.
@@ -331,12 +330,12 @@ class HVPUC(Optimizer):
             if np.isnan(f_k) or np.isinf(f_k):
                 print('Objective value at given initial point and computed proximal point is NaN or Inf. Exiting ...')
                 return self.get_results_dict(x_k, f_k, None, 2, 2, 0, time.time() - start_time,
-                                                False, None, None, None, None, False, 0, 
+                                                False, None, None, None, None, False, 0, None,
                                                 'Objective value at given initial point and computed proximal point is NaN or Inf')
             elif np.any(np.isnan(g_k)) or np.any(np.isinf(g_k)):
                 print('Gradient at given initial point and computed proximal point contains NaN or Inf. Exiting ...')
                 return self.get_results_dict(x_k, f_k, None, 2, 2, 0, time.time() - start_time,
-                                                    False, None, None, None, None, False, 0, 
+                                                    False, None, None, None, None, False, 0, None,
                                                     'Gradient at given initial point and computed proximal point is NaN or Inf')
 
         nfev = 1
@@ -382,7 +381,7 @@ class HVPUC(Optimizer):
 
             return A_new
 
-        # B_k = convexify(B_k, min_eig=1e-8, strategy='flip')
+        B_k = convexify(B_k, min_eig=1e-8, strategy='flip')
         # ################################################
         all_Xs = np.array([])
         while itr < maxiter:
@@ -406,10 +405,33 @@ class HVPUC(Optimizer):
 
                 if "matrix G is not positive definite" in str(e):
                     print('Matrix G is not positive definite. Resetting Hessian.')
-                    init_scale = 1.
+                    init_scale = 0.0
+                    n = 0
+
+                    # initialize new hessian with identity, scaled by the average
+                    # curvature across the set of HVPs.
+                    for s, y in zip(S.T, Y.T):
+                        yTy = y.T @ y
+                        yTs = y.T @ s
+                        if yTs < 1e-5:
+                            continue
+                        n += 1
+                        init_scale += yTy / yTs
+                    if n == 0:
+                        init_scale = 1.0
+                    else:
+                        init_scale /= n
+                    # wTw = np.dot(w_k, w_k)
+                    # wTd = np.dot(w_k, d_k[:nx])
+
+                    # init_scale = wTw / (wTd+1e-16) if wTd > 0 else 1.
 
                     # Can do 'skip_update' or 'damp_update'
-                    self.QN = QN = self.QN_HVP = QN_HVP = BFGSScipy(nx=nx,
+                    self.QN = QN = BFGSScipy(nx=nx,
+                                            exception_strategy=self.BFGS_exception_strategy,
+                                            init_scale=init_scale)
+                    
+                    self.QN_HVP = QN_HVP = BFGSScipy(nx=nx,
                                             exception_strategy=self.BFGS_exception_strategy,
                                             init_scale=init_scale)
                     
@@ -530,6 +552,10 @@ class HVPUC(Optimizer):
                     self.QN = QN = BFGSScipy(nx=nx,
                                              exception_strategy=self.BFGS_exception_strategy,
                                              init_scale=1.)
+                    
+                    self.QN_HVP = QN_HVP = BFGSScipy(nx=nx,
+                                             exception_strategy=self.BFGS_exception_strategy,
+                                             init_scale=1.)
                     continue
 
                 if self.successive_undefined_iterations == 2:
@@ -537,7 +563,7 @@ class HVPUC(Optimizer):
 
                     return self.get_results_dict(x_k, f_k, opt, nfev, ngev, itr, time.time() - start_time,
                                         False, approx_hess, true_hess, bk_obj, Us,
-                                        ams_success, n_hvp, 'Unsuccessful line search for well-defined points')
+                                        ams_success, n_hvp, inner_opt_msgs, 'Unsuccessful line search for well-defined points')
      
             elif undefined_direction:
                 self.successive_undefined_iterations = 0
@@ -562,8 +588,9 @@ class HVPUC(Optimizer):
                 d_k = alpha * p_k
                 d_k_temp = d_k * 1.
 
-            # hvp_old = self.hvp(x_k, d_k_temp[:nx])
-            # ngev += 1
+            if not np.all(np.isclose(d_k, d_k_temp)):
+                print('mismatch d_k')
+
             x_k += d_k_temp
             f_old = f_k * 1.
             g_old = g_k * 1.
@@ -579,23 +606,30 @@ class HVPUC(Optimizer):
             #######################################################
 
             # m is the number of HVPs.must be <= r
-            # normally use 3 HVPs per step. Incorporate more HVPs at first step
-            # NOTE: The next area of investigation. How to pick the number of HVPs and the rank of the update 
-
             if self.options['m']:
-                m = min(nx, self.options['m'])
+                m = min(nx, self.options['m']) 
             else:
                 m = min(nx, 1)
 
-            # m = self.options['m']
+            use_hvp = True 
+            # itr starts at 1 
+            if np.mod(itr, 50) == 0:
+                use_hvp = True
+                if self.options['method'] == 'BFGS':
+                    self.QN = QN = BFGSScipy(nx=nx,
+                            exception_strategy=self.BFGS_exception_strategy,
+                            init_scale=1.0)
+            else:
+                m = 1
+                use_hvp = False
 
             # Set of HVP directions (inputs)
             S = np.ones((nx, m))
             # First HVP direction is the step direction
             if self.options['normalize_s'] and self.options['m']:
-                S[:, 0] = d_k[:nx] / np.linalg.norm(d_k[:nx])
+                S[:, 0] = d_k_temp[:nx] / np.linalg.norm(d_k_temp[:nx])
             else:
-                S[:, 0] = d_k[:nx] 
+                S[:, 0] = d_k_temp[:nx] 
 
             # Set of HVPs (outputs)
             Y = np.ones(S.shape)
@@ -610,44 +644,47 @@ class HVPUC(Optimizer):
             #         else:
             #             S[:, i+1] = Y[:, i] 
 
-            # all_Xs = np.hstack((all_Xs, x_k.reshape(-1,1))) if all_Xs.size else x_k.reshape(-1,1)
 
             
             # orthogonal krylov HVPs with filtering and normalization
-            s = d_k[:nx]
-            invalid_idx = np.ones((m, ), dtype=bool)
+            s = np.copy(d_k_temp[:nx])
+            invalid_idx = np.zeros((m, ), dtype=bool)
 
             for i in range(m):
                 # correct direction by subtracting out directions we've already explored 
                 for j in range(i):
                     s -= np.dot(s, S[:, j]) * S[:, j]
+
+                if np.linalg.norm(s) < 1e-16 and i > 0:
+                    invalid_idx[i] = True
                 
                 s /= np.linalg.norm(s)
                 y = self.hvp(x_k, s)
+                n_hvp += 1
                 
-                
-                pos_curvature = np.dot(s, y) > 1e-4
+                neg_curvature = np.dot(s, y) < 1e-4
 
-                if pos_curvature:
-                    invalid_idx[i] = False
+                if neg_curvature and 'skip' in self.BFGS_exception_strategy:
+                    invalid_idx[i] = True
 
                 Y[:, i] = y
                 S[:, i] = s
                 s = y
 
-            # Replace m with the actual number of HVPs used (ie: those corresponding to directions of positive curvature)
-            # I think this is OK. it is akin to throwing out or clipping negative eigenvalues of the hessian 
-            # Ie: we'll just ignore those directions. 
+            # Skip directions of negative (or low) curvature
+            # if 'skip' in self.BFGS_exception_strategy:
             m -= np.sum(invalid_idx)
             Y = np.delete(Y, invalid_idx, axis=1)
             S = np.delete(S, invalid_idx, axis=1)
+
             all_Xs = np.hstack((all_Xs, x_k.reshape(-1,1))) if all_Xs.size else x_k.reshape(-1,1)
 
-            # 
             _success = False
+            inner_opt_msg = 'success'
             U = 0
             bk_obj_val = 0
-            hess = self.problem._compute_objective_hessian(x_k)
+            # hess = self.problem._compute_objective_hessian(x_k)
+            hess = np.eye(x_k.size)
 
             if np.all(hess == 0):
                 hess = 1e6 * np.eye(nx)
@@ -655,102 +692,39 @@ class HVPUC(Optimizer):
 
             if 'AMS' in self.options['method'] and m > 0:
                 B_k, results, U = self.AMS.update_B(B_k, S, Y, x_k, r=m)
+
                 _success = results['success']
                 bk_obj_val = results['fun']
+                inner_opt_msg = results['message']
                 
-
             elif self.options['method'] == 'bBFGS':
                 self.AMS.hess = hess
-                B_k, success = self.AMS.update_B(B_k, S, Y, x_k, r=m)
+                B_k, success, msg = self.AMS.update_B(B_k, S, Y, x_k, r=m)
 
-                for i in range(m-1, -1, -1):
-                    QN_HVP.update(S[:, i], Y[:, i])
-
-                bk_ibfgs = QN_HVP.B_k
-
-                print(f'Error for iBFGS: {np.linalg.norm(bk_ibfgs - hess)}')
-                print(f'Error for bBFGS: {np.linalg.norm(B_k - hess)}')
                 _success = success
+                inner_opt_msg = msg
 
             elif self.options['method'] == 'iBFGS':
-                for i in range(m-1, -1, -1):
-                    QN_HVP.update(S[:, i], Y[:, i])
+                if use_hvp:
+                    for i in range(m):
+                        QN_HVP.update(S[:, i], Y[:, i])
+                else:
+                    QN_HVP.update(d_k_temp[:nx], g_k - g_old)
                 B_k = QN_HVP.B_k
 
             elif self.options['method'] == 'Newton':
                 B_k = convexify(hess)
 
             elif self.options['method'] == 'BFGS':
-                QN.update(d_k[:nx], g_k - g_old)
+                QN.update(d_k_temp[:nx], g_k - g_old)
                 B_k = QN.B_k
 
-            
-            # if self.options['m']:
-            #     _success = False
-
-            #     if 'AMS' in self.options['method']: 
-            #         B_k, results, U = self.AMS.update_B(B_k, S, Y, x_k, r=m)
-            #         _success = results['success']
-            #     elif 'BlockBFGS' == self.options['method']:
-            #         B_k = self.AMS.update_B(B_k, S, Y, x_k, r=m)
-            #         _success = True
-            #         U = 0
-
-            #     if not _success or 'inplaceBFGS' == self.options['method']:
-            #         B_k = QN_HVP.B_k                    
-            # else:
-            #     B_k = QN.B_k
-
-
-            # if self.options['m']:
-            #     # if not _success:
-            #     B_k = 
-            # else:
-            #     B_k = QN.B_k
-
-
-            # ams_hess.append(B_k)
-            # ams_hess.append(QN_HVP.B_k)
-            # qn_hess.append(QN.B_k)
-
-            ### Old code for computing true hessian ###
-            # hvp_base = np.eye(nx)
-            # hess = np.zeros_like(hvp_base)
-            # for i in range(nx):
-            #     hess[:, i] = self.hvp(x_k, hvp_base[:, i])
-            ### New code for computing true hessian ###
-            # hess = self.problem._compute_objective_hessian(x_k)
-
-            # if self.options['use_exact_hess']:
-            #     B_k = convexify(hess)
-
-
+            inner_opt_msgs.append(inner_opt_msg)
             true_hess.append(hess)
             approx_hess.append(B_k)
             bk_obj.append(bk_obj_val)
             ams_success.append(_success)
             Us.append(U)
-            # bk_obj.append(results['fun'])
-            # ams_success.append(_success)
-
-            # if not _success:
-            #     print('AMS not successful. Falling back on Quasi-Newton')
-        
-            #     B_k = QN.B_k * 1.0
-            #     bk_hist['fail'] = bk_hist.get('fail', 0) + 1
-            # elif not is_positive_definite(B_k):
-            #     print('AMS Returns non PD B_k. Falling back on Quasi-Newton')
-            #     B_k = QN.B_k * 1.0
-            #     bk_hist['non-PD'] = bk_hist.get('non-PD', 0) + 1
-            # else:
-            #     bk_hist['success'] = bk_hist.get('success', 0) + 1
-
-            bk_obj.append(0)
-            ams_success.append(True)
-            # Us.append(0)
-
-
-            #######################################################
 
             # <<<<<<<<<<<<<<<<<<<
             # ALGORITHM ENDS HERE
@@ -779,7 +753,7 @@ class HVPUC(Optimizer):
 
         self.results = self.get_results_dict(x_k, f_k, opt, nfev, ngev, itr, self.total_time,
                                              tol_satisfied, approx_hess, true_hess, bk_obj, Us,
-                                             ams_success, n_hvp, '')
+                                             ams_success, n_hvp, inner_opt_msgs, '')
 
         # Run post-processing for the Optimizer() base class
         self.run_post_processing()
