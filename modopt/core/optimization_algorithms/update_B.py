@@ -36,24 +36,24 @@ class AdaptiveMultiSecant1():
         self.n_itr = 0
         self.x0 = None
 
-        jax_obj = lambda U, V: jnp.linalg.norm(U @ U.T - V @ V.T, ord='fro')
+        # jax_obj = lambda U, V: jnp.linalg.norm(U @ U.T - V @ V.T, ord='fro')
 
-        def jax_obj(U, V, B, S_all, Y_all, beta, weights):
+        def jax_obj(U, V, alpha, beta, B, S_all, Y_all, gamma, weights):
             # find lowest magnitude of U. 
             # pow = jnp.min(jnp.abs(U))
-            obj = jnp.linalg.norm(U @ U.T - V @ V.T, ord='fro')
-            B_new = B + U @ U.T - V @ V.T
+            obj = jnp.linalg.norm(U @ alpha @ U.T - V @ beta @ V.T, ord='fro')
+            B_new = B + U @ alpha @ U.T - V @ beta @ V.T
 
             c_all = weights*(B_new @ S_all - Y_all)
 
-            penalized_obj = beta * obj + jnp.sum(jnp.linalg.norm(c_all, axis=0))
+            penalized_obj = gamma * obj + jnp.sum(jnp.linalg.norm(c_all, axis=0))
             return penalized_obj
         
         _obj = jax.jit(jax_obj)
-        self._obj  = lambda U, V, B, S_all, Y_all, beta, weights: np.float64(_obj(U, V, B, S_all, Y_all, beta, weights))
+        self._obj  = lambda U, V, alpha, beta, B, S_all, Y_all, gamma, weights: np.float64(_obj(U, V, alpha, beta, B, S_all, Y_all, gamma, weights))
 
         _grad = jax.jit(jax.grad(jax_obj, argnums=[0, 1]))
-        self._grad  = lambda U, V, B, S_all, Y_all, beta, weights: np.asarray(_grad(U, V, B, S_all, Y_all, beta, weights)).ravel()
+        self._grad  = lambda U, V, alpha, beta, B, S_all, Y_all, gamma, weights: np.asarray(_grad(U, V, alpha, beta, B, S_all, Y_all, gamma, weights)).ravel()
 
         # Multi-secant condition. Replace with penalty term
         # IDEA: if we filter out HVPs, then maybe we can re-introduce this constraint. Or enforce it implicitly
@@ -69,12 +69,12 @@ class AdaptiveMultiSecant1():
         # self._con1  = lambda U, V, B, S, Y: np.array(_con1(U, V, B, S, Y))
 
         # Forcing positive-definiteness
-        def jax_con2(U, V, B):
-            B_new = B + U @ U.T - V @ V.T
+        def jax_con2(U, V, alpha, beta, B):
+            B_new = B + U @ alpha @ U.T - V @ beta @ V.T
             w = jnp.real(jnp.linalg.eigvals(B_new))
             return jnp.array([jnp.min(w) - 1e-6])
         _con2 = jax.jit(jax_con2)
-        self._con2  = lambda U, V, B: np.array(_con2(U, V, B))
+        self._con2  = lambda U, V, alpha, beta, B: np.array(_con2(U, V, alpha, beta, B))
 
         # _jac1 = jax.jit(jax.jacobian(jax_con1, argnums=[0,1]))
         # def temp_jac1(U, V, B, S, Y):
@@ -82,10 +82,12 @@ class AdaptiveMultiSecant1():
         #     return np.hstack((dU.reshape(dU.shape[0], -1), dV.reshape(dV.shape[0], -1)))
         # self._jac1 = temp_jac1
 
-        _jac2 = jax.jit(jax.jacobian(jax_con2, argnums=[0,1]))
-        def temp_jac2(U, V, B):
-            dU, dV = _jac2(U, V, B)
-            return np.hstack((dU.reshape(dU.shape[0], -1), dV.reshape(dV.shape[0], -1)))
+        _jac2 = jax.jit(jax.jacobian(jax_con2, argnums=[0, 1]))
+        def temp_jac2(U, V, alpha, beta, B):
+            dU, dV = _jac2(U, V, alpha, beta, B)
+            return np.hstack((dU.reshape(dU.shape[0], -1), 
+                              dV.reshape(dV.shape[0], -1),
+                              ))
         self._jac2 = temp_jac2
 
     def update_B(self, B, S, Y, x_k, r=1):
@@ -135,13 +137,13 @@ class AdaptiveMultiSecant1():
 
         self.weights = self.gamma + (1-self.gamma) * self.weights
 
-        # Beta is how much we care about the norm of UU^T. 
+        # gamma is how much we care about the norm of UU^T. 
         # Here we are saying that the update for B should be dominated by
         # satisfying a weighted sum of past secant conditions.
         if len(self.weights) == 0:
-            beta = 1
+            gamma = 1
         else:
-            beta = np.min(self.weights) * 0.001
+            gamma = np.min(self.weights) * 0.1
         
         # Seed optimizer with previous U matrix, if available. 
         x0 = np.ones(((r1 + r2) * nx,))
@@ -150,20 +152,30 @@ class AdaptiveMultiSecant1():
 
         # U and V represent sets of dyads. U adds new curvature (from latest batch of y) and V removes curvature (from last batch)
         # U analagous to Y, V analagous to B_k S
-        if not (self.prev_U is None):
-            nu = self.prev_U.shape[1]
-            x0[0:min(r1, nu)*nx] = np.reshape(self.prev_U, (nu*nx))[:min(nu, r1) * nx]
+        # if not (self.prev_U is None):
+        #     nu = self.prev_U.shape[1]
+        #     x0[0:min(r1, nu)*nx] = np.reshape(self.prev_U, (nu*nx))[:min(nu, r1) * nx]
 
-        if not (self.prev_V is None):
-            nv = self.prev_V.shape[1]
-            x0[r1*nx:r1*nx + min(r2, nv)*nx] = np.reshape(self.prev_V, (nv*nx))[:min(nv, r2) * nx]
+        # if not (self.prev_V is None):
+        #     nv = self.prev_V.shape[1]
+        #     x0[r1*nx:r1*nx + min(r2, nv)*nx] = np.reshape(self.prev_V, (nv*nx))[:min(nv, r2) * nx]
+
+        # init U0 to be Y, alpha0 to be (S.T @ Y)^-1
+        x0[:r1*nx] = self.all_Y.flat
+        x0[r1*nx:] = (B @ self.all_S).flat
+        alpha = np.linalg.inv(self.all_S.T @ Y)
+        beta = np.linalg.inv(self.all_S.T @ B @ self.all_S)
+
+        # init V0 to be B_k @ S, beta0 t obe S.T @ 
+
+        # 
 
 
         if self.prev_B is None:
             self.prev_B = np.eye(nx)
 
-        obj  = lambda x: self._obj(x[:r1*nx].reshape(nx, r1), x[r1*nx:].reshape(nx, r2), B, self.all_S, self.all_Y, beta, self.weights)
-        grad = lambda x: self._grad(x[:r1*nx].reshape(nx, r1), x[r1*nx:].reshape(nx, r2), B, self.all_S, self.all_Y, beta, self.weights)
+        obj  = lambda x: self._obj(x[:r1*nx].reshape(nx, r1), x[r1*nx:].reshape(nx, r2), alpha, beta, B, self.all_S, self.all_Y, gamma, self.weights)
+        grad = lambda x: self._grad(x[:r1*nx].reshape(nx, r1), x[r1*nx:].reshape(nx, r2), alpha, beta, B, self.all_S, self.all_Y, gamma, self.weights)
 
 
         constraints = {
@@ -171,9 +183,13 @@ class AdaptiveMultiSecant1():
             'type': 'ineq',
             'fun': lambda x: self._con2(x[:r1*nx].reshape(nx, r1), 
                                         x[r1*nx:].reshape(nx, r2), 
+                                        alpha,
+                                        beta,
                                         B),
             'jac': lambda x: self._jac2(x[:r1*nx].reshape(nx, r1), 
                                         x[r1*nx:].reshape(nx, r2), 
+                                        alpha, 
+                                        beta,
                                         B)
         }
 
@@ -210,7 +226,7 @@ class AdaptiveMultiSecant1():
 
         if results['success']:
             
-            B_new = B + U @ U.T - V @ V.T
+            B_new = B + U @ alpha @ U.T - V @ beta @ V.T
             # try: 
             #     _ = np.linalg.cholesky(B_new)
             #     self.prev_U = U
