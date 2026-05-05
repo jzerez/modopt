@@ -3,6 +3,7 @@
 import numpy as np
 from modopt import CUTEstProblem, OpenSQP, BFGS
 from modopt.core.optimization_algorithms.hvp_uc import HVPUC
+from modopt.core.optimization_algorithms.hvp_uc_2 import HVPUC as HVPUC2
 import pycutest
 import time
 import contextlib
@@ -22,7 +23,8 @@ from hist import get_list_hist
 # algs = ['OpenSQP', 'HVPUC', 'HVPUC1', 'HVPUC2', 'nHVPUC1', 'nHVPUC2', 'zHVPUC', ]
 # algs = ['OpenSQP', 'BFGS', 'Newton', 'iBFGS-1-n', 'iBFGS-2-n', 'bBFGS-1-n', 'bBFGS-2-n']
 # algs = ['OpenSQP', 'BFGS', 'iBFGS-1', 'iBFGS-2', 'iBFGS-4', 'bBFGS-2', 'bBFGS-4', 'AMS1-1', 'AMS1-2', 'AMS1-4', 'AMS3-1', 'AMS3-2' , 'AMS3-4']
-algs = ['OpenSQP', 'BFGS', 'iBFGS-1', 'iBFGS-2', 'iBFGS-4', 'iBFGS-10', 'iBFGS-25']
+# algs = ['OpenSQP', 'AMS1-1', 'AMS1-2', 'iBFGS-1']
+algs=  ['OpenSQP', 'hvpuc-2']
 performance = {}
 history = {}
 time_loop = 1
@@ -121,7 +123,7 @@ max_probs = 999
 max_prob_size = 100
 min_prob_size = 0
 # normalize_step = False
-run_name = 'ibfgs_baseline6_50'
+run_name = 'hvp_uc2_test'
 save_eval_df = True
 save_errs = True
 err_hist = {}
@@ -202,7 +204,8 @@ for i, prob_name in enumerate(valid_prob_names):
         ax.axis('off')
 
     alg_count = -1
-    
+    sqp_info = []
+    hvp_info = []
     for alg in algs:
         alg_count += 1
         solver = alg
@@ -210,6 +213,8 @@ for i, prob_name in enumerate(valid_prob_names):
         
         print(f'\t{alg} ... ', end='')
         start_time = time.time()
+        
+
         try:
             for i in range(time_loop):
                 # with contextlib.redirect_stdout(io.StringIO()):
@@ -225,6 +230,15 @@ for i, prob_name in enumerate(valid_prob_names):
                             ax.text(0.1, 1.0, f'OPEN SQP\nFinal Objective: {results["objective"]:.2e}\nSuccess: {results["success"]}\nIterations: {results["niter"]}\n x*: {np.round(results["x"], 3)}\n opt: {results["optimality"]}',
                                     horizontalalignment='left', verticalalignment='top', fontsize=8
                                     )
+                    sqp_info += [results['nfev'], results['ngev'], results['niter'],]
+                elif solver == 'hvpuc-2':
+                    options = {'maxiter': maxiter, 'opt_tol': 1.22e-4}
+                    results = HVPUC2(prob, recording=False, turn_off_outputs=True).solve()
+                    hvp_info += [results['nfev'], results['ngev'], results['niter'],]
+                    
+                    if sqp_info[0] != hvp_info[0] or sqp_info[1] != hvp_info[1] or sqp_info[2] != hvp_info[2]:
+                        print('sldkjf')
+                    continue
                 else:
                     
                     solver_params = solver.split('-')

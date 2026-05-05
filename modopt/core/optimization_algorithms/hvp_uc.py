@@ -122,7 +122,7 @@ class HVPUC(Optimizer):
         }
 
     def setup(self):
-        self.BFGS_exception_strategy = 'damp_update'
+        self.BFGS_exception_strategy = 'skip_update'
         # self.setup_constraints()
         nx   = self.nx
 
@@ -620,7 +620,7 @@ class HVPUC(Optimizer):
                             exception_strategy=self.BFGS_exception_strategy,
                             init_scale=1.0)
             else:
-                m = 1
+                # m = 1
                 use_hvp = False
 
             # Set of HVP directions (inputs)

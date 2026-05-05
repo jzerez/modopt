@@ -191,6 +191,184 @@ def generate_performance_profiles(data):
         return Tau, performance_profiles, Tau_n, performance_profiles_n
 
     return Tau, performance_profiles
+
+def generate_performance_profiles2(data):
+    '''
+    Compute performance profiles and return them along 
+    with their corresponding performance ratio (`Tau`) values.
+
+    Depending on the input data, the function returns either two or four outputs:
+    
+    - If `'nev'` exists in `list(data.values())[0]`:
+
+      - `Tau` (np.ndarray): Array of `Tau` values for the primary (time) performance profiles.
+
+      - `performance_profiles` (np.ndarray): Performance profiles corresponding to `Tau`.
+
+      - `Tau_n` (np.ndarray): Array of `Tau` values for secondary (nev) performance profiles.
+
+      - `performance_profiles_n` (np.ndarray): Performance profiles corresponding to `Tau_n`.
+
+    - Otherwise:
+
+      - `Tau` (np.ndarray): Array of `Tau` values for the primary (time) performance profiles.
+
+      - `performance_profiles` (np.ndarray): Performance profiles corresponding to `Tau`.
+
+    Parameters
+    ----------
+    data : dict
+        Dictionary containing the performance data for each solver.
+        The keys are the (problem_name: str, solver_name: str) and the values are 
+        dictionaries containing `'time'` and `'success'` as keys with corresponding
+        values denoting the time (`float`) taken for `solver_name` to solve `problem_name`
+        and the success (`bool`) of the solver.
+        Additionally, if the number of evaluations is available, 
+        the dictionary can also contain `'nev'` as a key with 
+        the corresponding `int` value denoting the number of evaluations.
+
+    Returns
+    -------
+    Tau : numpy.ndarray
+        Array of log-scaled performance ratios.
+    performance_profiles : dict
+        Dictionary containing the performance profiles for each solver.
+        The keys are the solver names and the values are the proportion of problems
+        solved under the performance ratio corresponding to entries in Tau.
+    Tau_n : numpy.ndarray
+        Array of log-scaled performance ratios for the number of evaluations.
+        Only returned if the number of evaluations `'nev'` is available in the data.
+    performance_profiles_n : dict
+        Dictionary containing the performance profiles for the number of evaluations.
+        The keys are the solver names and the values are the proportion of problems
+        solved under the performance ratio corresponding to entries in Tau_n.
+        Only returned if the number of evaluations `'nev'` is available in the data.
+    
+    Examples
+    --------
+    >>> from modopt.benchmarking import generate_performance_profiles
+    >>> data = {('problem1', 'solver1'): {'time': 0.1, 'success': True},
+    ...         ('problem1', 'solver2'): {'time': 0.2, 'success': True},
+    ...         ('problem2', 'solver1'): {'time': 0.3, 'success': True},
+    ...         ('problem2', 'solver2'): {'time': 0.4, 'success': False}}
+    >>> Tau, performance_profiles = generate_performance_profiles(data)
+    Total number of problems: 2 
+    <BLANKLINE>
+    Solver: solver1
+    --------------------------------------------------
+    Number of problems solved: 2
+    Percentage of problems solved: 100.0
+    -------------------------------------------------- 
+    <BLANKLINE>
+    Solver: solver2
+    --------------------------------------------------
+    Number of problems solved: 1
+    Percentage of problems solved: 50.0
+    -------------------------------------------------- 
+    <BLANKLINE>
+    >>> print(Tau) # doctest: +SKIP
+    '''
+    
+    # Get the unique solvers and problems
+    solvers  = np.unique([key[1] for key in data.keys()])
+    problems = np.unique([key[0] for key in data.keys()])
+
+    # Get the minimum time taken by any solver for a given problem
+    min_times = {}
+    for problem in problems:
+        successful_times = [data[(problem, solver)]['time'] for solver in solvers if data[(problem, solver)]['success']]
+        if successful_times == []:
+            min_times[problem] = 1.0 # Put any non-zero value since all solvers will be using a large time
+        else:
+            min_times[problem] = np.min(successful_times)
+
+        if min_times[problem] == 0:
+            raise ValueError('Time taken by a successful solver for problem {} is 0.'.format(problem))
+
+    # Compute the performance ratio - time
+    perf_ratio = {}
+    for solver in solvers:
+        for problem in problems:
+            if data[(problem, solver)]['success']:
+                perf_ratio[(problem, solver)] = data[(problem, solver)]['time'] / min_times[problem]
+            else:
+                perf_ratio[(problem, solver)] = np.inf
+
+    # Get the maximum performance ratio over all problems
+    successful_perf_ratios = [value for value in perf_ratio.values() if value != np.inf]
+    if successful_perf_ratios == []:
+        raise ValueError('All solvers failed on all problems.')
+    max_perf_ratio = np.max(successful_perf_ratios)
+    
+    # Replace inf with 10 * max_perf_ratio
+    # perf_ratio = {key: 10 * max_perf_ratio if value == np.inf else value for key, value in perf_ratio.items()}
+    for key, value in perf_ratio.items():
+        if value == np.inf:
+            perf_ratio[key] = 10 * max_perf_ratio
+
+    # Compute the performance ratio - number of evaluations
+    if 'niter' in data[(problems[0], solvers[0])]:
+        min_nevs = {}
+        for problem in problems:
+            successful_nevs = [data[(problem, solver)]['niter'] for solver in solvers if data[(problem, solver)]['success']]
+            if successful_nevs == []:
+                min_nevs[problem] = 1 # Put any non-zero value since all solvers will be using a large nev
+            else:
+                min_nevs[problem] = np.min(successful_nevs)
+
+            if min_nevs[problem] == 0:
+                raise ValueError('Number of iterations by a successful solver for problem {} is 0.'.format(problem))
+
+        perf_ratio_n = {}
+        for solver in solvers:
+            for problem in problems:
+                if data[(problem, solver)]['success']:
+                    perf_ratio_n[(problem, solver)] = data[(problem, solver)]['niter'] / min_nevs[problem]
+                else:
+                    perf_ratio_n[(problem, solver)] = np.inf
+
+        # The following block is redundant since this is already done for time
+        # successful_perf_ratios_n = [value for value in perf_ratio_n.values() if value != np.inf]
+        # if successful_perf_ratios_n == []:
+        #     raise ValueError('All solvers failed on all problems.')
+        
+        max_perf_ratio_n = np.max([value for value in perf_ratio_n.values() if value != np.inf])
+
+        # Replace inf with 10 * max_perf_ratio_n
+        for key, value in perf_ratio_n.items():
+            if value == np.inf:
+                perf_ratio_n[key] = 10 * max_perf_ratio_n
+
+    def performance_function(Tau, perf_ratio):
+        performance_profiles = {}
+        for solver in solvers:
+            performance_profiles[solver] = []
+            for t in Tau:
+                # Number of problems solved under tau performance ratio
+                n_solved = np.sum([1 if np.log2(value) <= t else 0 for key, value in perf_ratio.items() if key[1] == solver])
+                performance_profiles[solver].append(n_solved / len(problems))
+        
+        return performance_profiles
+    
+    Tau = np.linspace(0, np.log2(max_perf_ratio*10), 100)[:-1] # upper bound 10*max_perf_ratio needs to be omitted
+    performance_profiles = performance_function(Tau, perf_ratio)
+
+    print('Total number of problems:', len(problems), '\n')
+    for solver in solvers:
+        print('Solver:', solver)
+        print('-'*50)
+        print('Number of problems solved:', round(performance_profiles[solver][-2]*len(problems)))
+        print('Percentage of problems solved:', performance_profiles[solver][-2]*100)
+        print('-'*50, '\n')
+
+    if 'niter' in data[(problems[0], solvers[0])]:
+        Tau_n = np.linspace(0, np.log2(max_perf_ratio_n*10), 100)[:-1] # upper bound 10*max_perf_ratio_n needs to be omitted
+        performance_profiles_n = performance_function(Tau_n, perf_ratio_n)
+
+        return Tau, performance_profiles, Tau_n, performance_profiles_n
+
+    return Tau, performance_profiles
+
     
 def plot_performance_profiles(data, save_figname='performance.pdf', show_plot=True):
     '''
@@ -243,7 +421,7 @@ def plot_performance_profiles(data, save_figname='performance.pdf', show_plot=Tr
     plt.rcParams['xtick.labelsize']=20
     plt.rcParams['ytick.labelsize']=20
     
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(layout='constrained')
     ax.set_title('Performance Profile (time)', fontsize=24)
     ax.set_xlabel('Logarithmic performance ratio, $log_2(\\tau)$', fontsize=24)
     ax.set_ylabel('Proportion of problems solved', fontsize=24)
@@ -253,6 +431,8 @@ def plot_performance_profiles(data, save_figname='performance.pdf', show_plot=Tr
     
     else:
         Tau, performance_profiles, Tau_n, performance_profiles_n = generate_performance_profiles(data)
+
+    
 
     for i, (solver, profile) in enumerate(performance_profiles.items()):
         k = int(i / 10)
@@ -279,7 +459,7 @@ def plot_performance_profiles(data, save_figname='performance.pdf', show_plot=Tr
         plt.show()
 
     if 'nev' in data[(list(data.keys())[0][0], list(data.keys())[0][1])]:
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(layout='constrained')
         ax.set_title('Data Profile (function evaluations)', fontsize=24)
         ax.set_xlabel('Logarithmic performance ratio, $log_2(\\tau)$', fontsize=24)
         ax.set_ylabel('Proportion of problems solved', fontsize=24)
