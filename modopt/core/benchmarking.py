@@ -341,7 +341,7 @@ def generate_performance_profiles2(data, fields=['time', 'nev']):
     return tau_dict, performance_profile_dict
 
     
-def plot_performance_profiles(data, save_figname='performance.pdf', show_plot=True, fields=['time', 'nev']):
+def plot_performance_profiles(data, save_figname='performance.pdf', show_plot=True, fields=[]):
     '''
     Plot the performance profiles for the given data.
 
@@ -392,53 +392,37 @@ def plot_performance_profiles(data, save_figname='performance.pdf', show_plot=Tr
     plt.rcParams['xtick.labelsize']=20
     plt.rcParams['ytick.labelsize']=20
     
-    fig, ax = plt.subplots(layout='constrained')
-    ax.set_title('Performance Profile (time)', fontsize=24)
-    ax.set_xlabel('Logarithmic performance ratio, $log_2(\\tau)$', fontsize=24)
-    ax.set_ylabel('Proportion of problems solved', fontsize=24)
-
-    if 'nev' not in data[(list(data.keys())[0][0], list(data.keys())[0][1])]:
-        Tau, performance_profiles = generate_performance_profiles(data)
     
+
+    if fields:
+        tau_dict, performance_profile_dict = generate_performance_profiles2(data, fields)
     else:
-        Tau, performance_profiles, Tau_n, performance_profiles_n = generate_performance_profiles(data)
+        tau_dict = {}
+        performance_profile_dict = {}
+        fields = ['time',]
+        if 'nev' not in data[(list(data.keys())[0][0], list(data.keys())[0][1])]:
+            Tau, performance_profiles = generate_performance_profiles(data)
+            tau_dict['time'] = Tau
+            performance_profile_dict['time'] = performance_profiles 
+        else:
+            fields.append('nev')
+            Tau, performance_profiles, Tau_n, performance_profiles_n = generate_performance_profiles(data)
+            tau_dict['time'] = Tau
+            performance_profile_dict['time'] = performance_profiles 
+            tau_dict['nev'] = Tau_n
+            performance_profile_dict['nev'] = performance_profiles_n
+        
 
     
-
-    for i, (solver, profile) in enumerate(performance_profiles.items()):
-        k = int(i / 10)
-        if k == 0:
-            ls = '-'
-        elif k == 1:
-            ls = '--'
-        elif k == 2:
-            ls = ':'
-        else:
-            ls = '-.'
-        ax.plot(Tau, profile, label=solver, linewidth = 2.0, linestyle=ls)
-
-    # Move legend to the right of the ax
-    ax.legend(fontsize=18, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
-
-
-    ax.set_xlim([0., Tau[-1]])
-    ax.set_ylim([0., 1.])
-    plt.minorticks_off()
-    fig.set_size_inches(8, 6)
-    plt.savefig(save_figname, bbox_inches='tight')
-    if show_plot:
-        plt.show()
-
-    if 'nev' in data[(list(data.keys())[0][0], list(data.keys())[0][1])]:
+    for field in fields:
         fig, ax = plt.subplots(layout='constrained')
-        ax.set_title('Data Profile (function evaluations)', fontsize=24)
+        ax.set_title(f'Performance Profile ({field})', fontsize=24)
         ax.set_xlabel('Logarithmic performance ratio, $log_2(\\tau)$', fontsize=24)
         ax.set_ylabel('Proportion of problems solved', fontsize=24)
+        Tau = tau_dict[field]
+        performance_profiles = performance_profile_dict[field]
 
-        # for solver, profile in performance_profiles_n.items():
-        #     ax.plot(Tau_n, profile, label=solver, linewidth = 2.0)
-
-        for i, (solver, profile) in enumerate(performance_profiles_n.items()):
+        for i, (solver, profile) in enumerate(performance_profiles.items()):
             k = int(i / 10)
             if k == 0:
                 ls = '-'
@@ -448,16 +432,49 @@ def plot_performance_profiles(data, save_figname='performance.pdf', show_plot=Tr
                 ls = ':'
             else:
                 ls = '-.'
-            ax.plot(Tau_n, profile, label=solver, linewidth = 2.0, linestyle=ls)
+            ax.plot(Tau, profile, label=solver, linewidth = 2.0, linestyle=ls)
 
+        # Move legend to the right of the ax
         ax.legend(fontsize=18, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
-        ax.set_xlim([0., Tau_n[-1]])
+
+
+        ax.set_xlim([0., Tau[-1]])
         ax.set_ylim([0., 1.])
         plt.minorticks_off()
         fig.set_size_inches(8, 6)
-        plt.savefig(save_figname.replace('.pdf', '_nev.pdf'), bbox_inches='tight')
+        plt.savefig(save_figname.replace('.pdf', '_' + field + '.pdf'), bbox_inches='tight')
         if show_plot:
             plt.show()
+
+    # if 'nev' in data[(list(data.keys())[0][0], list(data.keys())[0][1])]:
+    #     fig, ax = plt.subplots(layout='constrained')
+    #     ax.set_title('Data Profile (function evaluations)', fontsize=24)
+    #     ax.set_xlabel('Logarithmic performance ratio, $log_2(\\tau)$', fontsize=24)
+    #     ax.set_ylabel('Proportion of problems solved', fontsize=24)
+
+    #     # for solver, profile in performance_profiles_n.items():
+    #     #     ax.plot(Tau_n, profile, label=solver, linewidth = 2.0)
+
+    #     for i, (solver, profile) in enumerate(performance_profiles_n.items()):
+    #         k = int(i / 10)
+    #         if k == 0:
+    #             ls = '-'
+    #         elif k == 1:
+    #             ls = '--'
+    #         elif k == 2:
+    #             ls = ':'
+    #         else:
+    #             ls = '-.'
+    #         ax.plot(Tau_n, profile, label=solver, linewidth = 2.0, linestyle=ls)
+
+    #     ax.legend(fontsize=18, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
+    #     ax.set_xlim([0., Tau_n[-1]])
+    #     ax.set_ylim([0., 1.])
+    #     plt.minorticks_off()
+    #     fig.set_size_inches(8, 6)
+    #     plt.savefig(save_figname.replace('.pdf', '_nev.pdf'), bbox_inches='tight')
+    #     if show_plot:
+    #         plt.show()
 
 def filter_cutest_problems(num_vars=[0,1], num_cons=[0,0], tags=[], return_metadata=False):
     '''

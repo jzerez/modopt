@@ -36,7 +36,7 @@ prob    = None
 
 # Only import required problems based on the table
 from modopt.benchmarking import filter_cutest_problems
-all_prob_names = filter_cutest_problems(num_vars=[1, 100], num_cons=[0, 0])
+all_prob_names = filter_cutest_problems(num_vars=[100, 100000], num_cons=[0, 0])
 # Remove problems that cause import issues
 remove_probs = ['DMN15102LS', 
                 'DMN15103LS', 
@@ -55,6 +55,7 @@ remove_probs = ['DMN15102LS',
                 'STRATEC',
                 'VAREIGVL',
                 'LUKSAN11LS',
+                'HADAMALS',
                 ]
 
 # hard_probs = ['BOXBODLS', 'CERI651BLS', 'CERI651CLS', 'CERI651DLS', 'CLIFF', 'DANWOODLS', 'DJTL']
@@ -91,13 +92,15 @@ iteration_categories = ['n_iter', 'n_fev', 'n_gev', 'n_hvpev', 'avg_ls_itr']
 valid_prob_names = []
 
 for prob_name in all_prob_names:
+    if prob_name in remove_probs:
+        continue
+
     try:
         prob = pycutest.import_problem(prob_name)
     except ModuleNotFoundError:
         continue
     
-    if prob_name in remove_probs:
-        continue
+    
 
     unbounded = np.all(prob.bu == 1.0e20) and np.all(prob.bl == -1.0e20)
     if not unbounded:
@@ -123,10 +126,10 @@ save_figs = False
 save_results = True
 show_figs = False
 max_probs = 999
-max_prob_size = 100
-min_prob_size = 0
+max_prob_size = 100000
+min_prob_size = 100
 # normalize_step = False
-run_name = 'ibfgs_benchmark_small-50'
+run_name = 'ibfgs_benchmark_large-50'
 save_eval_df = True
 save_errs = True
 err_hist = {}
@@ -406,6 +409,9 @@ for i, prob_name in enumerate(valid_prob_names):
                                                'success': success,
                                                'nev': nev,
                                                'niter': niter,
+                                               'nfev': o_evals,
+                                               'ngev': g_evals,
+                                               'nhvp': hvp_evals,
                                                'objective': objective,
                                                'B_k err': B_k_err,
                                                'B_k ang': B_k_ang}

@@ -411,23 +411,23 @@ class HVPUC(Optimizer):
 
                     # # initialize new hessian with identity, scaled by the average
                     # # curvature across the set of HVPs.
-                    # for s, y in zip(S.T, Y.T):
-                    #     yTy = y.T @ y
-                    #     yTs = y.T @ s
-                    #     if yTs < 1e-5:
-                    #         continue
-                    #     n += 1
-                    #     init_scale += yTy / yTs
-                    # if n == 0:
-                    #     init_scale = 1.0
-                    # else:
-                    #     init_scale /= n
+                    for s, y in zip(S.T, Y.T):
+                        yTy = y.T @ y
+                        yTs = y.T @ s
+                        if yTs < 1e-5:
+                            continue
+                        n += 1
+                        init_scale += yTy / yTs
+                    if n == 0:
+                        init_scale = 1.0
+                    else:
+                        init_scale /= n
 
-                    w_k = g_old - g_k
-                    wTw = np.dot(w_k, w_k)
-                    wTd = np.dot(w_k, d_k[:nx])
+                    # w_k = g_old - g_k
+                    # wTw = np.dot(w_k, w_k)
+                    # wTd = np.dot(w_k, d_k[:nx])
 
-                    init_scale = wTw / (wTd+1e-16) if wTd > 0 else 1.
+                    # init_scale = wTw / (wTd+1e-16) if wTd > 0 else 1.
 
                     # Can do 'skip_update' or 'damp_update'
                     self.QN = QN = BFGSScipy(nx=nx,
@@ -444,7 +444,7 @@ class HVPUC(Optimizer):
                     
                     continue
             # Clip the step length such that the design variables remain within bounds
-            p_k[:nx] = np.clip(p_k, self.problem.x_lower - x_k, self.problem.x_upper - x_k)
+            # p_k[:nx] = np.clip(p_k, self.problem.x_lower - x_k, self.problem.x_upper - x_k)
 
             print('\nMajor iteration:', itr)
             print("=====================================")
