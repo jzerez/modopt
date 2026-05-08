@@ -24,7 +24,10 @@ from hist import get_list_hist
 # algs = ['OpenSQP', 'BFGS', 'Newton', 'iBFGS-1-n', 'iBFGS-2-n', 'bBFGS-1-n', 'bBFGS-2-n']
 # algs = ['OpenSQP', 'BFGS', 'iBFGS-1', 'iBFGS-2', 'iBFGS-4', 'bBFGS-2', 'bBFGS-4', 'AMS1-1', 'AMS1-2', 'AMS1-4', 'AMS3-1', 'AMS3-2' , 'AMS3-4']
 # algs = ['OpenSQP', 'AMS1-1', 'AMS1-2', 'iBFGS-1']
-algs=  ['OpenSQP', 'hvpuc-2']
+algs=  ['OpenSQP', 'BFGS', 'iBFGS-1-h', 'iBFGS-2-h', 'iBFGS-4-h', 'iBFGS-10-h', 'iBFGS-20-h',
+        'iBFGS-1-s', 'iBFGS-2-s', 'iBFGS-4-s', 'iBFGS-10-s', 'iBFGS-20-s']
+
+# algs = ['iBFGS-1-h', 'iBFGS-4-h', 'iBFGS-3-s']
 performance = {}
 history = {}
 time_loop = 1
@@ -52,7 +55,7 @@ remove_probs = ['DMN15102LS',
                 'STRATEC',
                 'VAREIGVL',
                 'LUKSAN11LS',
-                'GROWTHLS']
+                ]
 
 # hard_probs = ['BOXBODLS', 'CERI651BLS', 'CERI651CLS', 'CERI651DLS', 'CLIFF', 'DANWOODLS', 'DJTL']
 
@@ -115,15 +118,15 @@ t0 = time.time()
 # BA-L1SPLS
 # BENNETT5LS: Histogram is wrong and it says that AMS is working but the norm of BK is massive
 
-plot_on = True
-save_figs = True
+plot_on = False
+save_figs = False
 save_results = True
 show_figs = False
 max_probs = 999
 max_prob_size = 100
 min_prob_size = 0
 # normalize_step = False
-run_name = 'hvp_uc2_test'
+run_name = 'ibfgs_benchmark_small-50'
 save_eval_df = True
 save_errs = True
 err_hist = {}
@@ -233,7 +236,7 @@ for i, prob_name in enumerate(valid_prob_names):
                     sqp_info += [results['nfev'], results['ngev'], results['niter'],]
                 elif solver == 'hvpuc-2':
                     options = {'maxiter': maxiter, 'opt_tol': 1.22e-4}
-                    results = HVPUC2(prob, recording=False, turn_off_outputs=True).solve()
+                    results = HVPUC2(prob, **options, recording=False, turn_off_outputs=True).solve()
                     hvp_info += [results['nfev'], results['ngev'], results['niter'],]
                     
                     if sqp_info[0] != hvp_info[0] or sqp_info[1] != hvp_info[1] or sqp_info[2] != hvp_info[2]:
@@ -246,17 +249,18 @@ for i, prob_name in enumerate(valid_prob_names):
                         m = int(solver_params[1])
                     else:
                         m = 0
-
-                    if len(solver_params) == 3:
-                        normalized = True
+                    
+                    if len(solver_params) > 2:
+                        if solver_params[2] == 'h':
+                            use_secant = False
                     else:
-                        normalized = False
+                        use_secant = True
             
                     method = solver_params[0]
 
 
 
-                    options = {'maxiter': maxiter, 'opt_tol': 1.22e-4, 'm': m, 'normalize_s': normalized, 'use_exact_hess':method=='Newton', 'method': method}
+                    options = {'maxiter': maxiter, 'opt_tol': 1.22e-4, 'm': m, 'use_secant': use_secant, 'use_exact_hess':method=='Newton', 'method': method}
                     # with contextlib.redirect_stdout(io.StringIO()):
                     results = HVPUC(prob, **options, recording=False, turn_off_outputs=True).solve()
                     hvp_pass = results['success']
@@ -265,7 +269,7 @@ for i, prob_name in enumerate(valid_prob_names):
                         ax.text(0.1, 0.85 - 0.25*alg_count, f'{alg}\nFinal Objective: {results["objective"]:.2e}\nSuccess: {results["success"]}\nIterations: {results["niter"]}\n x*: {np.round(results["x"], 3)}',
                                 horizontalalignment='left', verticalalignment='top', fontsize=8
                             )
-                    get_list_hist(results['inner_opt_msgs'])
+
                     if plot_on:
                         # Plot Objective value of U
                         # ax = axs[0]
@@ -350,7 +354,7 @@ for i, prob_name in enumerate(valid_prob_names):
             B_k_err = results.get('B_k_err', [])
             B_k_ang = results.get('B_k_ang', [])
 
-            if not 'OpenSQP' == alg:
+            if (not 'OpenSQP' == alg) and (not 'hvpuc-2' in alg):
                 B_k_err = [np.linalg.norm(bk - hk) for bk, hk in zip(results['approx_hess'], results['true_hess'])]
                 B_k_ang = [np.dot(h_ams.flatten(), h_true.flatten()) / (np.linalg.norm(h_ams) * np.linalg.norm(h_true)) for h_ams, h_true in zip(results['approx_hess'], results['true_hess'])]
             

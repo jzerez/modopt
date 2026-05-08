@@ -192,7 +192,7 @@ def generate_performance_profiles(data):
 
     return Tau, performance_profiles
 
-def generate_performance_profiles2(data):
+def generate_performance_profiles2(data, fields=['time', 'nev']):
     '''
     Compute performance profiles and return them along 
     with their corresponding performance ratio (`Tau`) values.
@@ -226,6 +226,9 @@ def generate_performance_profiles2(data):
         Additionally, if the number of evaluations is available, 
         the dictionary can also contain `'nev'` as a key with 
         the corresponding `int` value denoting the number of evaluations.
+    fields : list of str
+        Parameters to generate profile curves for. Valid options are: 
+        'niter', 'nfev', 'ngev', 'nhvp', 'nev'
 
     Returns
     -------
@@ -273,71 +276,9 @@ def generate_performance_profiles2(data):
     solvers  = np.unique([key[1] for key in data.keys()])
     problems = np.unique([key[0] for key in data.keys()])
 
-    # Get the minimum time taken by any solver for a given problem
-    min_times = {}
-    for problem in problems:
-        successful_times = [data[(problem, solver)]['time'] for solver in solvers if data[(problem, solver)]['success']]
-        if successful_times == []:
-            min_times[problem] = 1.0 # Put any non-zero value since all solvers will be using a large time
-        else:
-            min_times[problem] = np.min(successful_times)
+    tau_dict = {}
+    performance_profile_dict = {}
 
-        if min_times[problem] == 0:
-            raise ValueError('Time taken by a successful solver for problem {} is 0.'.format(problem))
-
-    # Compute the performance ratio - time
-    perf_ratio = {}
-    for solver in solvers:
-        for problem in problems:
-            if data[(problem, solver)]['success']:
-                perf_ratio[(problem, solver)] = data[(problem, solver)]['time'] / min_times[problem]
-            else:
-                perf_ratio[(problem, solver)] = np.inf
-
-    # Get the maximum performance ratio over all problems
-    successful_perf_ratios = [value for value in perf_ratio.values() if value != np.inf]
-    if successful_perf_ratios == []:
-        raise ValueError('All solvers failed on all problems.')
-    max_perf_ratio = np.max(successful_perf_ratios)
-    
-    # Replace inf with 10 * max_perf_ratio
-    # perf_ratio = {key: 10 * max_perf_ratio if value == np.inf else value for key, value in perf_ratio.items()}
-    for key, value in perf_ratio.items():
-        if value == np.inf:
-            perf_ratio[key] = 10 * max_perf_ratio
-
-    # Compute the performance ratio - number of evaluations
-    if 'niter' in data[(problems[0], solvers[0])]:
-        min_nevs = {}
-        for problem in problems:
-            successful_nevs = [data[(problem, solver)]['niter'] for solver in solvers if data[(problem, solver)]['success']]
-            if successful_nevs == []:
-                min_nevs[problem] = 1 # Put any non-zero value since all solvers will be using a large nev
-            else:
-                min_nevs[problem] = np.min(successful_nevs)
-
-            if min_nevs[problem] == 0:
-                raise ValueError('Number of iterations by a successful solver for problem {} is 0.'.format(problem))
-
-        perf_ratio_n = {}
-        for solver in solvers:
-            for problem in problems:
-                if data[(problem, solver)]['success']:
-                    perf_ratio_n[(problem, solver)] = data[(problem, solver)]['niter'] / min_nevs[problem]
-                else:
-                    perf_ratio_n[(problem, solver)] = np.inf
-
-        # The following block is redundant since this is already done for time
-        # successful_perf_ratios_n = [value for value in perf_ratio_n.values() if value != np.inf]
-        # if successful_perf_ratios_n == []:
-        #     raise ValueError('All solvers failed on all problems.')
-        
-        max_perf_ratio_n = np.max([value for value in perf_ratio_n.values() if value != np.inf])
-
-        # Replace inf with 10 * max_perf_ratio_n
-        for key, value in perf_ratio_n.items():
-            if value == np.inf:
-                perf_ratio_n[key] = 10 * max_perf_ratio_n
 
     def performance_function(Tau, perf_ratio):
         performance_profiles = {}
@@ -350,27 +291,57 @@ def generate_performance_profiles2(data):
         
         return performance_profiles
     
-    Tau = np.linspace(0, np.log2(max_perf_ratio*10), 100)[:-1] # upper bound 10*max_perf_ratio needs to be omitted
-    performance_profiles = performance_function(Tau, perf_ratio)
+    for field in fields:
+        # Get the minimum time taken by any solver for a given problem
+        min_val = {}
+        for problem in problems:
+            successful = [data[(problem, solver)][field] for solver in solvers if data[(problem, solver)]['success']]
+            if successful == []:
+                min_val[problem] = 1.0 # Put any non-zero value since all solvers will be using a large time
+            else:
+                min_val[problem] = np.min(successful)
 
-    print('Total number of problems:', len(problems), '\n')
-    for solver in solvers:
-        print('Solver:', solver)
-        print('-'*50)
-        print('Number of problems solved:', round(performance_profiles[solver][-2]*len(problems)))
-        print('Percentage of problems solved:', performance_profiles[solver][-2]*100)
-        print('-'*50, '\n')
+            if min_val[problem] == 0:
+                raise ValueError(f'{field} taken by a successful solver for problem {problem} is 0.')
 
-    if 'niter' in data[(problems[0], solvers[0])]:
-        Tau_n = np.linspace(0, np.log2(max_perf_ratio_n*10), 100)[:-1] # upper bound 10*max_perf_ratio_n needs to be omitted
-        performance_profiles_n = performance_function(Tau_n, perf_ratio_n)
+        # Compute the performance ratio - time
+        perf_ratio = {}
+        for solver in solvers:
+            for problem in problems:
+                if data[(problem, solver)]['success']:
+                    perf_ratio[(problem, solver)] = data[(problem, solver)][field] / min_val[problem]
+                else:
+                    perf_ratio[(problem, solver)] = np.inf
 
-        return Tau, performance_profiles, Tau_n, performance_profiles_n
+        # Get the maximum performance ratio over all problems
+        successful_perf_ratios = [value for value in perf_ratio.values() if value != np.inf]
+        if successful_perf_ratios == []:
+            raise ValueError('All solvers failed on all problems.')
+        max_perf_ratio = np.max(successful_perf_ratios)
+        
+        # Replace inf with 10 * max_perf_ratio
+        # perf_ratio = {key: 10 * max_perf_ratio if value == np.inf else value for key, value in perf_ratio.items()}
+        for key, value in perf_ratio.items():
+            if value == np.inf:
+                perf_ratio[key] = 10 * max_perf_ratio
+    
+        Tau = np.linspace(0, np.log2(max_perf_ratio*10), 100)[:-1] # upper bound 10*max_perf_ratio needs to be omitted
+        performance_profiles = performance_function(Tau, perf_ratio)
+        tau_dict[field] = Tau
+        performance_profile_dict[field] = performance_profiles
 
-    return Tau, performance_profiles
+        print('Total number of problems:', len(problems), '\n')
+        for solver in solvers:
+            print('Solver:', solver)
+            print('-'*50)
+            print('Number of problems solved:', round(performance_profiles[solver][-2]*len(problems)))
+            print('Percentage of problems solved:', performance_profiles[solver][-2]*100)
+            print('-'*50, '\n')
+
+    return tau_dict, performance_profile_dict
 
     
-def plot_performance_profiles(data, save_figname='performance.pdf', show_plot=True):
+def plot_performance_profiles(data, save_figname='performance.pdf', show_plot=True, fields=['time', 'nev']):
     '''
     Plot the performance profiles for the given data.
 

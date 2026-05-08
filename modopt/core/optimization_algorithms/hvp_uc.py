@@ -101,7 +101,7 @@ class HVPUC(Optimizer):
         self.options.declare('ls_eta_w', default=0.95, types=float)
         self.options.declare('ls_alpha_tol', default=1e-14, types=float)
         self.options.declare('m', default=1, types=int)
-        self.options.declare('normalize_s', default=False, types=bool)
+        self.options.declare('use_secant', default=False, types=bool)
         self.options.declare('use_exact_hess', default=False, types=bool)
         self.options.declare('method', default='AMS3', types=str)
 
@@ -122,7 +122,7 @@ class HVPUC(Optimizer):
         }
 
     def setup(self):
-        self.BFGS_exception_strategy = 'skip_update'
+        self.BFGS_exception_strategy = 'damp_update'
         # self.setup_constraints()
         nx   = self.nx
 
@@ -292,6 +292,7 @@ class HVPUC(Optimizer):
         QN = self.QN
         MF = self.MF
         QN_HVP = self.QN_HVP
+        B_k_reset = False
 
         eps = 2.22e-16
 
@@ -408,23 +409,25 @@ class HVPUC(Optimizer):
                     init_scale = 0.0
                     n = 0
 
-                    # initialize new hessian with identity, scaled by the average
-                    # curvature across the set of HVPs.
-                    for s, y in zip(S.T, Y.T):
-                        yTy = y.T @ y
-                        yTs = y.T @ s
-                        if yTs < 1e-5:
-                            continue
-                        n += 1
-                        init_scale += yTy / yTs
-                    if n == 0:
-                        init_scale = 1.0
-                    else:
-                        init_scale /= n
-                    # wTw = np.dot(w_k, w_k)
-                    # wTd = np.dot(w_k, d_k[:nx])
+                    # # initialize new hessian with identity, scaled by the average
+                    # # curvature across the set of HVPs.
+                    # for s, y in zip(S.T, Y.T):
+                    #     yTy = y.T @ y
+                    #     yTs = y.T @ s
+                    #     if yTs < 1e-5:
+                    #         continue
+                    #     n += 1
+                    #     init_scale += yTy / yTs
+                    # if n == 0:
+                    #     init_scale = 1.0
+                    # else:
+                    #     init_scale /= n
 
-                    # init_scale = wTw / (wTd+1e-16) if wTd > 0 else 1.
+                    w_k = g_old - g_k
+                    wTw = np.dot(w_k, w_k)
+                    wTd = np.dot(w_k, d_k[:nx])
+
+                    init_scale = wTw / (wTd+1e-16) if wTd > 0 else 1.
 
                     # Can do 'skip_update' or 'damp_update'
                     self.QN = QN = BFGSScipy(nx=nx,
@@ -435,10 +438,13 @@ class HVPUC(Optimizer):
                                             exception_strategy=self.BFGS_exception_strategy,
                                             init_scale=init_scale)
                     
+                    B_k_reset = True
 
                     B_k = np.eye(nx)
                     
                     continue
+            # Clip the step length such that the design variables remain within bounds
+            p_k[:nx] = np.clip(p_k, self.problem.x_lower - x_k, self.problem.x_upper - x_k)
 
             print('\nMajor iteration:', itr)
             print("=====================================")
@@ -536,6 +542,8 @@ class HVPUC(Optimizer):
                         new_g_evals += 1
                         if alpha < 1e-12:
                             undefined_new_point = True
+                            # array([-2000.03030771,    48.95105266,   274.15573542])
+                            # alpha 0.001
                             break
 
                 if self.problem.constrained:
@@ -556,6 +564,9 @@ class HVPUC(Optimizer):
                     self.QN_HVP = QN_HVP = BFGSScipy(nx=nx,
                                              exception_strategy=self.BFGS_exception_strategy,
                                              init_scale=1.)
+                    
+                    B_k_reset = True
+
                     continue
 
                 if self.successive_undefined_iterations == 2:
@@ -604,72 +615,57 @@ class HVPUC(Optimizer):
 
             # Adaptive Multi-Secant V3
             #######################################################
-
-            # m is the number of HVPs.must be <= r
-            if self.options['m']:
-                m = min(nx, self.options['m']) 
-            else:
-                m = min(nx, 1)
-
-            use_hvp = True 
+            
             # itr starts at 1 
+            use_hvp = True
             if np.mod(itr, 50) == 0:
-                use_hvp = True
+                if self.options['m']:
+                    m = min(nx, self.options['m'])
+                else:
+                    m = 1
+
                 if self.options['method'] == 'BFGS':
                     self.QN = QN = BFGSScipy(nx=nx,
                             exception_strategy=self.BFGS_exception_strategy,
                             init_scale=1.0)
+                # B_k_reset = False
             else:
-                # m = 1
-                use_hvp = False
-
-            # Set of HVP directions (inputs)
-            S = np.ones((nx, m))
-            # First HVP direction is the step direction
-            if self.options['normalize_s'] and self.options['m']:
-                S[:, 0] = d_k_temp[:nx] / np.linalg.norm(d_k_temp[:nx])
-            else:
-                S[:, 0] = d_k_temp[:nx] 
-
-            # Set of HVPs (outputs)
-            Y = np.ones(S.shape)
-            
-            # Krylov sub-space HVPs. the ith HVP is along the direction of the (i-1)th HVP
-            # for i in range(m):
-            #     Y[:, i] = self.hvp(x_k, S[:, i]) # Hessian-vector product with the ith column of S (the step taken)
-            #     n_hvp += 1
-            #     if i+1 < m:
-            #         if self.options['normalize_s'] and self.options['m']:
-            #             S[:, i+1] = Y[:, i] / np.linalg.norm(Y[:, i])
-            #         else:
-            #             S[:, i+1] = Y[:, i] 
-
+                m = 1
+                if self.options['use_secant']:
+                    use_hvp = False
 
             
             # orthogonal krylov HVPs with filtering and normalization
+            # Set of HVP directions (inputs)
+            S = np.ones((nx, m))
+
+            # Set of HVPs (outputs)
+            Y = np.ones(S.shape)
+
             s = np.copy(d_k_temp[:nx])
             invalid_idx = np.zeros((m, ), dtype=bool)
 
-            for i in range(m):
-                # correct direction by subtracting out directions we've already explored 
-                for j in range(i):
-                    s -= np.dot(s, S[:, j]) * S[:, j]
+            if use_hvp:
+                for i in range(m):
+                    # correct direction by subtracting out directions we've already explored 
+                    for j in range(i):
+                        s -= np.dot(s, S[:, j]) * S[:, j]
 
-                if np.linalg.norm(s) < 1e-16 and i > 0:
-                    invalid_idx[i] = True
-                
-                s /= np.linalg.norm(s)
-                y = self.hvp(x_k, s)
-                n_hvp += 1
-                
-                neg_curvature = np.dot(s, y) < 1e-4
+                    if np.linalg.norm(s) < 1e-16 and i > 0:
+                        invalid_idx[i] = True
+                    
+                    s /= np.linalg.norm(s)
+                    y = self.hvp(x_k, s)
+                    n_hvp += 1
+                    
+                    neg_curvature = np.dot(s, y) < 1e-4
 
-                if neg_curvature and 'skip' in self.BFGS_exception_strategy:
-                    invalid_idx[i] = True
+                    if neg_curvature and 'skip' in self.BFGS_exception_strategy:
+                        invalid_idx[i] = True
 
-                Y[:, i] = y
-                S[:, i] = s
-                s = y
+                    Y[:, i] = y
+                    S[:, i] = s
+                    s = y
 
             # Skip directions of negative (or low) curvature
             # if 'skip' in self.BFGS_exception_strategy:
@@ -691,11 +687,20 @@ class HVPUC(Optimizer):
 
 
             if 'AMS' in self.options['method'] and m > 0:
-                B_k, results, U = self.AMS.update_B(B_k, S, Y, x_k, r=m)
+                if use_hvp:
+                    B_k, results, U = self.AMS.update_B(B_k, S, Y, x_k, r=m)
 
-                _success = results['success']
-                bk_obj_val = results['fun']
-                inner_opt_msg = results['message']
+                    _success = results['success']
+                    bk_obj_val = results['fun']
+                    inner_opt_msg = results['message']
+                    if _success:
+                        QN_HVP.B_k = B_k
+                    else:
+                        QN_HVP.update(d_k_temp[:nx], g_k - g_old)
+                else:
+                    QN_HVP.update(d_k_temp[:nx], g_k - g_old)
+
+                B_k = QN_HVP.B_k
                 
             elif self.options['method'] == 'bBFGS':
                 self.AMS.hess = hess

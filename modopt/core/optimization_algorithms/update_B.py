@@ -348,6 +348,42 @@ class AdaptiveMultiSecant3():
         _grad = jax.jit(jax.grad(jax_obj, argnums=[0]))
         self._grad  = lambda U, B, S_all, Y_all, beta, weights: np.asarray(_grad(U, B, S_all, Y_all, beta, weights)[0].ravel())
 
+    def add_hvp_info(self, S, Y, x_k):
+        nx, m = S.shape
+        if self.all_S is None:
+            self.all_S = S * 1.0
+            self.all_Y = Y * 1.0
+            self.all_X = x_k.reshape(-1,1) * 1.
+            self.x0 = x_k.reshape(-1,1) * 1.
+            self.weights = np.ones((m,), dtype=np.float64)
+            self.all_m = np.array([m,])
+        else:
+            # # This is requried for when the number of previous steps is less than self.save_last
+            # save_last = min(np.int32(self.all_S.shape[1]/r), self.save_last)
+            # Store history for S, Y, and X
+            self.all_m = np.hstack((m, self.all_m[:self.save_last]))
+            m_total = np.sum(self.all_m)
+
+            self.all_S = np.hstack((S, self.all_S))
+
+            ri = -1
+            while self.all_S.shape[1] > m_total:
+                self.all_S = np.delete(self.all_S, ri, axis=1)
+                
+            self.all_Y = np.hstack((Y, self.all_Y))
+            while self.all_Y.shape[1] > m_total:
+                self.all_Y = np.delete(self.all_Y, ri, axis=1)
+            
+
+            self.all_X = np.hstack((x_k.reshape(-1,1), self.all_X))
+            while self.all_X.shape[1] > self.save_last + 1:
+                self.all_X = np.delete(self.all_X, ri, axis=1)
+
+            dX = x_k.reshape(-1,1) - self.all_X
+            distance = np.linalg.norm(dX, axis=0)
+            self.weights = np.repeat(1.0 / (1.0 + distance**self.p) / np.exp(distance), self.all_m)
+
+
     def update_B(self, B, S, Y, x_k, r=1):
         nx, m = S.shape
         
@@ -405,7 +441,7 @@ class AdaptiveMultiSecant3():
         beta = np.min(self.weights) * 0.001
         
         # Seed optimizer with previous U matrix, if available. 
-        x0 = np.ones((r*nx,))
+        x0 = np.random.random((r*nx,))
 
         if not (self.prev_U is None):
             nu = self.prev_U.shape[1]
