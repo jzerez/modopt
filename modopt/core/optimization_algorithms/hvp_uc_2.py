@@ -213,7 +213,7 @@ class HVPUC(Optimizer):
 
         return opt_satisfied, opt
 
-    def get_results_dict(self, x_k, f_k, opt, nfev, ngev, niter, time, success):
+    def get_results_dict(self, x_k, f_k, opt, nfev, ngev, niter, time, success, err_msg):
         results = {'x': x_k,
                    'objective': f_k,
                    'optimality': opt,
@@ -221,7 +221,8 @@ class HVPUC(Optimizer):
                    'ngev': ngev,
                    'niter': niter,
                    'time': time,
-                   'success': success}
+                   'success': success, 
+                   'err_msg': err_msg,}
         return results
 
     def solve(self):
@@ -274,8 +275,9 @@ class HVPUC(Optimizer):
         
         if undefined_proximal_point:
             if np.all(x0 == x_k):
-                print('Initial point provided and proximal point computed were the same and is undefined. Exiting ...')
-                return self.get_results_dict(x_k, f_k, None, 1, 1, 0, time.time() - start_time, False)
+                err_msg = 'Initial point provided and proximal point computed were the same and is undefined. Exiting ...'
+                print(err_msg)
+                return self.get_results_dict(x_k, f_k, None, 1, 1, 0, time.time() - start_time, False, err_msg)
             
             x_k = x0 * 1.
 
@@ -284,11 +286,13 @@ class HVPUC(Optimizer):
             g_k = self.MF.cache['g'][1]
 
             if np.isnan(f_k) or np.isinf(f_k):
-                print('Objective value at given initial point and computed proximal point is NaN or Inf. Exiting ...')
-                return self.get_results_dict(x_k, f_k, None, 2, 2, 0, time.time() - start_time, False)
+                err_msg = 'Objective value at given initial point and computed proximal point is NaN or Inf. Exiting ...'
+                print(err_msg)
+                return self.get_results_dict(x_k, f_k, None, 2, 2, 0, time.time() - start_time, False, err_msg)
             elif np.any(np.isnan(g_k)) or np.any(np.isinf(g_k)):
-                print('Gradient at given initial point and computed proximal point contains NaN or Inf. Exiting ...')
-                return self.get_results_dict(x_k, f_k, None, 2, 2, 0, time.time() - start_time, False)
+                err_msg = 'Gradient at given initial point and computed proximal point contains NaN or Inf. Exiting ...'
+                print(err_msg)
+                return self.get_results_dict(x_k, f_k, None, 2, 2, 0, time.time() - start_time, False, err_msg)
 
         nfev = 1
         ngev = 1
@@ -298,7 +302,14 @@ class HVPUC(Optimizer):
         # Iteration counter
         itr = 0
         n_hvp = 0
-        all_Xs = np.array([])
+        all_Xs = np.array(x0.reshape(-1, 1))
+        approx_hess = [QN.B_k,]
+        nfevs = [nfev,]
+        ngevs = [ngev,]
+        nhvps = [n_hvp,]
+        niters = [itr, ]
+        objs = [f_k,]
+
         opt_satisfied, opt = self.opt_check(g_k)
         tol_satisfied = opt_satisfied
 
@@ -448,8 +459,9 @@ class HVPUC(Optimizer):
                     continue
 
                 if self.successive_undefined_iterations == 2:
-                    print('Two successive iterations with unsuccessful search along predicted direction for well-defined points. Terminating ...')
-                    return self.get_results_dict(x_k, f_k, opt, nfev, ngev, itr, time.time() - start_time, False)
+                    err_msg = 'Two successive iterations with unsuccessful search along predicted direction for well-defined points. Terminating ...'
+                    print(err_msg)
+                    return self.get_results_dict(x_k, f_k, opt, nfev, ngev, itr, time.time() - start_time, False, err_msg)
      
             elif undefined_direction:
                 self.successive_undefined_iterations = 0
@@ -488,16 +500,16 @@ class HVPUC(Optimizer):
             QN_d_k = d_k[:nx]
 
             use_hvp = True
-            if np.mod(itr, 50) == 0:
+            if np.mod(itr, 1) == 0:
                 if self.options['m']:
                     m = min(nx, self.options['m'])
                 else:
                     m = 1
 
                 if self.options['method'] == 'BFGS':
-                    self.QN = QN = BFGSScipy(nx=nx,
-                            exception_strategy=self.BFGS_exception_strategy,
-                            init_scale=1.0)
+                    # self.QN = QN = BFGSScipy(nx=nx,
+                    #         exception_strategy=self.BFGS_exception_strategy,
+                    #         init_scale=1.0)
                     use_hvp = False
             else:
                 m = 1
@@ -556,6 +568,8 @@ class HVPUC(Optimizer):
                 else:
                     QN.update(d_k_temp[:nx], g_k - g_old)
                 # B_k = QN.B_k
+            
+            approx_hess.append(QN.B_k.copy())
 
             # w_k = self.hvp(x_k, QN_d_k)
             # ngev += 1
@@ -578,6 +592,13 @@ class HVPUC(Optimizer):
 
             # # <<<<<<<<<<<<<<<<<<<
             # # ALGORITHM ENDS HERE
+
+            nfevs.append(nfev)
+            ngevs.append(ngev)
+            nhvps.append(n_hvp)
+            niters.append(itr)
+            objs.append(f_k)
+
 
             opt_satisfied, opt = self.opt_check(g_k)
             tol_satisfied = opt_satisfied
@@ -605,20 +626,25 @@ class HVPUC(Optimizer):
         self.results = {
             'x': x_k,
             'objective': f_k,
+            'objectives': objs,
             'optimality': opt,
+            'nfevs': nfevs,
+            'ngevs': ngevs,
+            'niters': niters,
             'nfev': nfev,
             'ngev': ngev,
             'niter': itr,
             'time': self.total_time,
             'success': tol_satisfied, 
-            'approx_hess': [],
+            'approx_hess': approx_hess,
             'true_hess': [],
             'bk_obj': [],
             'U': [],
             'ams_success': [],
+            'n_hvps': nhvps,
             'n_hvp': n_hvp,
-            'inner_opt_msgs': [],
-            'err_msg': [],
+            'err_msg': '',
+            'x_history': all_Xs,
         }
 
         # Run post-processing for the Optimizer() base class

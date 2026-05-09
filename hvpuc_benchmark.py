@@ -55,7 +55,10 @@ remove_probs = ['DMN15102LS',
                 'STRATEC',
                 'VAREIGVL',
                 'LUKSAN11LS',
-                'HADAMALS',
+                'HADAMALS', 
+                'MNISTS0LS',
+                'MNISTS5LS',
+                'MGH09LS',
                 ]
 
 # hard_probs = ['BOXBODLS', 'CERI651BLS', 'CERI651CLS', 'CERI651DLS', 'CLIFF', 'DANWOODLS', 'DJTL']
