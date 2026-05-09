@@ -192,7 +192,7 @@ def generate_performance_profiles(data):
 
     return Tau, performance_profiles
 
-def generate_performance_profiles2(data, fields=['time', 'nev']):
+def generate_performance_profiles2(data, fields=['time', 'nev'], alg_blacklist=[]):
     '''
     Compute performance profiles and return them along 
     with their corresponding performance ratio (`Tau`) values.
@@ -273,7 +273,7 @@ def generate_performance_profiles2(data, fields=['time', 'nev']):
     '''
     
     # Get the unique solvers and problems
-    solvers  = np.unique([key[1] for key in data.keys()])
+    solvers  = np.unique([key[1] for key in data.keys() if not key[1] in alg_blacklist])
     problems = np.unique([key[0] for key in data.keys()])
 
     tau_dict = {}
@@ -341,7 +341,7 @@ def generate_performance_profiles2(data, fields=['time', 'nev']):
     return tau_dict, performance_profile_dict
 
     
-def plot_performance_profiles(data, save_figname='performance.pdf', show_plot=True, fields=[]):
+def plot_performance_profiles(data, save_figname='performance.pdf', show_plot=True, fields=[], alg_blacklist = []):
     '''
     Plot the performance profiles for the given data.
 
@@ -395,7 +395,7 @@ def plot_performance_profiles(data, save_figname='performance.pdf', show_plot=Tr
     
 
     if fields:
-        tau_dict, performance_profile_dict = generate_performance_profiles2(data, fields)
+        tau_dict, performance_profile_dict = generate_performance_profiles2(data, fields, alg_blacklist=alg_blacklist)
     else:
         tau_dict = {}
         performance_profile_dict = {}

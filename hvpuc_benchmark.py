@@ -2,8 +2,8 @@
 
 import numpy as np
 from modopt import CUTEstProblem, OpenSQP, BFGS
-from modopt.core.optimization_algorithms.hvp_uc import HVPUC
-from modopt.core.optimization_algorithms.hvp_uc_2 import HVPUC as HVPUC2
+from modopt.core.optimization_algorithms.hvp_uc_2 import HVPUC
+# from modopt.core.optimization_algorithms.hvp_uc_2 import HVPUC as HVPUC2
 import pycutest
 import time
 import contextlib
@@ -14,7 +14,6 @@ import time
 import matplotlib.pyplot as plt
 import os
 import traceback
-from hist import get_list_hist
 
 # TODOs:
 # initialize with many hvps at first step, then do normal BFGS
@@ -24,8 +23,9 @@ from hist import get_list_hist
 # algs = ['OpenSQP', 'BFGS', 'Newton', 'iBFGS-1-n', 'iBFGS-2-n', 'bBFGS-1-n', 'bBFGS-2-n']
 # algs = ['OpenSQP', 'BFGS', 'iBFGS-1', 'iBFGS-2', 'iBFGS-4', 'bBFGS-2', 'bBFGS-4', 'AMS1-1', 'AMS1-2', 'AMS1-4', 'AMS3-1', 'AMS3-2' , 'AMS3-4']
 # algs = ['OpenSQP', 'AMS1-1', 'AMS1-2', 'iBFGS-1']
-algs=  ['OpenSQP', 'BFGS', 'iBFGS-1-h', 'iBFGS-2-h', 'iBFGS-4-h', 'iBFGS-10-h', 'iBFGS-20-h',
-        'iBFGS-1-s', 'iBFGS-2-s', 'iBFGS-4-s', 'iBFGS-10-s', 'iBFGS-20-s']
+# algs=  ['OpenSQP', 'BFGS', 'iBFGS-1-h', 'iBFGS-2-h', 'iBFGS-4-h', 'iBFGS-10-h', 'iBFGS-20-h',
+#         'iBFGS-1-s', 'iBFGS-2-s', 'iBFGS-4-s', 'iBFGS-10-s', 'iBFGS-20-s']
+algs = ['OpenSQP', 'BFGS', 'iBFGS-1-h', 'iBFGS-4-s']
 
 # algs = ['iBFGS-1-h', 'iBFGS-4-h', 'iBFGS-3-s']
 performance = {}
@@ -57,6 +57,9 @@ remove_probs = ['DMN15102LS',
                 'LUKSAN11LS',
                 'HADAMALS', # import error. missing attribute
                 'BA-L16LS', # segfault
+                'MNISTS0LS',
+                'MNISTS5LS',
+                'MGH09LS',
                 ]
 
 # hard_probs = ['BOXBODLS', 'CERI651BLS', 'CERI651CLS', 'CERI651DLS', 'CLIFF', 'DANWOODLS', 'DJTL']
@@ -133,7 +136,7 @@ max_probs = 999
 max_prob_size = 10000
 min_prob_size = 100
 # normalize_step = False
-run_name = 'ibfgs_benchmark_large-50'
+run_name = 'debug_bfgs'
 save_eval_df = True
 save_errs = True
 err_hist = {}
@@ -236,7 +239,7 @@ for i, prob_name in enumerate(valid_prob_names):
                 if solver == 'OpenSQP':
                     with contextlib.redirect_stdout(io.StringIO()):
                         options = {'maxiter': maxiter, 'opt_tol': 1.22e-4}
-                        results = OpenSQP(prob, **options, recording=False, turn_off_outputs=True).solve()
+                        results = OpenSQP(prob, **options, recording=True, turn_off_outputs=False).solve()
                         sqp_pass = results['success']
                         if plot_on:
                             # Record final performance metrics: nubmer of iterations, value of objective function, etc.
@@ -244,14 +247,14 @@ for i, prob_name in enumerate(valid_prob_names):
                                     horizontalalignment='left', verticalalignment='top', fontsize=8
                                     )
                     sqp_info += [results['nfev'], results['ngev'], results['niter'],]
-                elif solver == 'hvpuc-2':
-                    options = {'maxiter': maxiter, 'opt_tol': 1.22e-4}
-                    results = HVPUC2(prob, **options, recording=False, turn_off_outputs=True).solve()
-                    hvp_info += [results['nfev'], results['ngev'], results['niter'],]
+                # elif solver == 'hvpuc-2':
+                #     options = {'maxiter': maxiter, 'opt_tol': 1.22e-4}
+                #     results = HVPUC2(prob, **options, recording=False, turn_off_outputs=True).solve()
+                #     hvp_info += [results['nfev'], results['ngev'], results['niter'],]
                     
-                    if sqp_info[0] != hvp_info[0] or sqp_info[1] != hvp_info[1] or sqp_info[2] != hvp_info[2]:
-                        print('sldkjf')
-                    continue
+                #     if sqp_info[0] != hvp_info[0] or sqp_info[1] != hvp_info[1] or sqp_info[2] != hvp_info[2]:
+                #         print('sldkjf')
+                #     continue
                 else:
                     
                     solver_params = solver.split('-')
