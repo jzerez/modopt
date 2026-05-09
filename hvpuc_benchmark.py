@@ -36,7 +36,7 @@ prob    = None
 
 # Only import required problems based on the table
 from modopt.benchmarking import filter_cutest_problems
-all_prob_names = filter_cutest_problems(num_vars=[100, 100000], num_cons=[0, 0])
+all_prob_names = filter_cutest_problems(num_vars=[100, 10000], num_cons=[0, 0])
 # Remove problems that cause import issues
 remove_probs = ['DMN15102LS', 
                 'DMN15103LS', 
@@ -55,7 +55,8 @@ remove_probs = ['DMN15102LS',
                 'STRATEC',
                 'VAREIGVL',
                 'LUKSAN11LS',
-                'HADAMALS',
+                'HADAMALS', # import error. missing attribute
+                'BA-L16LS', # segfault
                 ]
 
 # hard_probs = ['BOXBODLS', 'CERI651BLS', 'CERI651CLS', 'CERI651DLS', 'CLIFF', 'DANWOODLS', 'DJTL']
@@ -95,6 +96,9 @@ for prob_name in all_prob_names:
     if prob_name in remove_probs:
         continue
 
+    if target_probs and (not prob_name in target_probs):
+        continue 
+
     try:
         prob = pycutest.import_problem(prob_name)
     except ModuleNotFoundError:
@@ -126,7 +130,7 @@ save_figs = False
 save_results = True
 show_figs = False
 max_probs = 999
-max_prob_size = 100000
+max_prob_size = 10000
 min_prob_size = 100
 # normalize_step = False
 run_name = 'ibfgs_benchmark_large-50'
@@ -212,6 +216,9 @@ for i, prob_name in enumerate(valid_prob_names):
     alg_count = -1
     sqp_info = []
     hvp_info = []
+    secant_success = {}
+    hvp_success = {}
+
     for alg in algs:
         alg_count += 1
         solver = alg
@@ -225,7 +232,7 @@ for i, prob_name in enumerate(valid_prob_names):
             for i in range(time_loop):
                 # with contextlib.redirect_stdout(io.StringIO()):
                 
-
+                results = {}
                 if solver == 'OpenSQP':
                     with contextlib.redirect_stdout(io.StringIO()):
                         options = {'maxiter': maxiter, 'opt_tol': 1.22e-4}
@@ -265,7 +272,24 @@ for i, prob_name in enumerate(valid_prob_names):
 
                     options = {'maxiter': maxiter, 'opt_tol': 1.22e-4, 'm': m, 'use_secant': use_secant, 'use_exact_hess':method=='Newton', 'method': method}
                     # with contextlib.redirect_stdout(io.StringIO()):
-                    results = HVPUC(prob, **options, recording=False, turn_off_outputs=True).solve()
+                    
+                    if use_secant and secant_success:
+                        results = secant_success
+                    elif (not use_secant) and hvp_success:
+                        results = hvp_success
+                    else:
+                        results = HVPUC(prob, **options, recording=False, turn_off_outputs=True).solve()
+                    
+                    if results['niter'] < 50 and results['success']:
+                        if use_secant:
+                            secant_success = results.copy()
+                        else:
+                            hvp_success = results.copy()
+
+                    
+
+
+
                     hvp_pass = results['success']
                     if plot_on:
                         ax = axs[-1]
